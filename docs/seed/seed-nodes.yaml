@@ -1,0 +1,657 @@
+# Dogfood seed data for redraft (S4a deliverable).
+#
+# Consumed by an S4b seeding script via redraft.store.GraphStore, NOT by
+# hand-writing frontmatter. Edge target strings below are plain node titles
+# (never "[[wikilink]]" syntax — that bracket/quote form is a storage-layer
+# serialization detail internal to GraphStore, per design-server.md §0.1).
+#
+# Loading contract — two passes, order-independent within each:
+#   Pass 1: for every entry, call
+#     store.create_node(type=.type, title=.title, body=.body,
+#                        status=.get("status"), properties=.get("properties"))
+#   Pass 2: for every entry, after ALL nodes from pass 1 exist:
+#     if .part_of is set: store.create_edge(src=.title, dst=.part_of, type="part_of")
+#     for edge_type, targets in .get("edges", {}).items():
+#       for target in targets: store.create_edge(src=.title, dst=target, type=edge_type)
+#
+# Two passes (not inline part_of/edges at create_node time) so this file's
+# node order carries no meaning and can be freely re-sorted or extended later
+# without an implicit "parent before child" ordering constraint to maintain.
+#
+# Schema per node: title (str, required, filesystem-safe, the id), type (str,
+# required, one of the 10 closed types), status (str, present only for
+# decision|question|milestone), body (str, 1-3 sentences), properties (map,
+# omitted when empty), part_of (str, scalar, omitted when the node is a
+# top-level concept), edges (map[str, list[str]], omitted when empty — the
+# other 8 edge types, always lists even for one target).
+
+nodes:
+
+  # --- Spine concepts -------------------------------------------------------
+
+  - title: "redraft"
+    type: concept
+    body: >-
+      AI-assisted project development and tracking, exposed over MCP, with a
+      plain-text-in-Git canonical store and a derived SQLite index. The hard
+      problem it solves is graph hygiene, not storage.
+    edges:
+      references: ["project-memory-graph-plan.md"]
+
+  - title: "Architecture"
+    type: concept
+    part_of: "redraft"
+    body: >-
+      Where the system's organizing judgment lives, what is canonical versus
+      derived, and which off-the-shelf components were adopted, forked, or
+      rejected to build it.
+
+  - title: "Data model"
+    type: concept
+    part_of: "redraft"
+    body: >-
+      The Obsidian-native node file format: filename-as-id, typed frontmatter,
+      quoted-wikilink edges, and the invariants that keep the canonical text
+      and the derived index honest.
+
+  - title: "Retrieval"
+    type: concept
+    part_of: "redraft"
+    body: >-
+      Hybrid lexical-plus-semantic search over the derived index, and the
+      cycle-safe recursive-CTE traversal that walks the graph without a
+      graph-database dependency.
+
+  - title: "Organizing protocol"
+    type: concept
+    part_of: "redraft"
+    body: >-
+      The procedure the calling agent follows to turn a freeform dump into
+      well-formed graph mutations — the behavior that makes this feel like an
+      assistant rather than a database.
+
+  - title: "Phased build plan"
+    type: concept
+    part_of: "redraft"
+    body: >-
+      The four-phase, gated build sequence: canonical store, MCP server,
+      retrieval, then the organizing protocol and reports.
+
+  # --- Architecture: the driver-question showcase ---------------------------
+  # Mandatory: one accepted decision plus four rejected alternatives, all
+  # addressing the same driver question, each with its own justifying
+  # rationale. This is the load-bearing "road not taken" demonstration.
+
+  - title: "Which memory architecture stores project design knowledge"
+    type: question
+    status: resolved
+    part_of: "Architecture"
+    body: >-
+      The central build-vs-adopt fork: whether to build a thin custom MCP
+      server over plain text, or adopt an existing memory/graph project as the
+      backend.
+
+  - title: "Adopt a thin custom MCP server with text-canonical storage"
+    type: decision
+    status: accepted
+    part_of: "Architecture"
+    properties:
+      effort: medium
+    body: >-
+      Build a small custom server: plain Markdown+frontmatter in Git as the
+      canonical store, a derived SQLite+FTS5+vector index, and MCP tools over
+      the top. Off-the-shelf wherever a library covers it; custom only where
+      the differentiators require it.
+    edges:
+      addresses: ["Which memory architecture stores project design knowledge"]
+
+  - title: "Off-the-shelf memory backends each fail a load-bearing constraint"
+    type: rationale
+    body: >-
+      basic-memory, the official reference server-memory, and Cognee/Graphiti
+      were each evaluated against the requirements below and each failed at
+      least one: license terms, a text-canonical path, or determinism on
+      write.
+    edges:
+      justifies: ["Adopt a thin custom MCP server with text-canonical storage"]
+
+  - title: "Adopt Graphiti as the memory backend"
+    type: decision
+    status: rejected
+    part_of: "Architecture"
+    body: >-
+      Use Graphiti's temporal knowledge-graph engine as the storage and
+      retrieval backend instead of building one, re-evaluated after a full
+      loss/gain accounting rather than dismissed on priors alone.
+    edges:
+      addresses: ["Which memory architecture stores project design knowledge"]
+
+  - title: "Graphiti has no text-canonical path and calls an LLM on write"
+    type: rationale
+    properties:
+      tradeoffs: >-
+        Borrowing just the temporal-invalidation idea via supersedes and
+        decision status captures most of the benefit without the graph-DB
+        coupling cost.
+    body: >-
+      Graphiti has no Markdown/text-canonical storage path at all, its
+      embedded backend is deprecated, and using it without its LLM-on-write
+      behavior collapses it to a graph-DB ORM this project doesn't need.
+    edges:
+      justifies: ["Adopt Graphiti as the memory backend"]
+
+  - title: "Fork basic-memory as the storage layer"
+    type: decision
+    status: rejected
+    part_of: "Architecture"
+    body: >-
+      Fork the basic-memory project and adapt its storage layer instead of
+      writing a new one.
+    edges:
+      addresses: ["Which memory architecture stores project design knowledge"]
+
+  - title: "basic-memory is AGPL-licensed with an inferred prose-embedded schema"
+    type: rationale
+    properties:
+      tradeoffs: >-
+        Would have saved a build; costs AGPL licensing exposure and a schema
+        that would have to be reverse-engineered from prose rather than
+        designed as a closed, typed set.
+    body: >-
+      basic-memory's schema is open/inferred and embedded in prose rather than
+      a closed typed set, and its license (AGPL) is a poor fit for a
+      component meant to sit underneath private project IP.
+    edges:
+      justifies: ["Fork basic-memory as the storage layer"]
+
+  - title: "Extend Cognee for project design memory"
+    type: decision
+    status: rejected
+    part_of: "Architecture"
+    body: >-
+      Use Cognee, already present in this environment as the user's
+      agent-memory layer, as the backend for project design knowledge too.
+    edges:
+      addresses: ["Which memory architecture stores project design knowledge"]
+
+  - title: "Cognee is DB-canonical, calls an LLM on write, and must stay a separate agent-memory layer"
+    type: rationale
+    properties:
+      tradeoffs: >-
+        Reuses a mature knowledge-graph engine; costs a text-canonical path,
+        adds LLM-on-write nondeterminism, and couples this product to the
+        user's own agent-memory layer, which must stay fully sandboxed from
+        it regardless of the storage decision.
+    body: >-
+      Cognee is database-canonical (no plain-text portability path) and calls
+      an LLM on write, and it is deliberately reserved as the user's own
+      agent-memory layer — this product must never touch it.
+    edges:
+      justifies: ["Extend Cognee for project design memory"]
+
+  - title: "Use an Obsidian vault with no custom server"
+    type: decision
+    status: rejected
+    part_of: "Architecture"
+    body: >-
+      Skip the server entirely: a tagged Obsidian vault plus a generic search
+      MCP, with no typed schema, no integrity queries, and no report
+      assembly.
+    edges:
+      addresses: ["Which memory architecture stores project design knowledge"]
+
+  - title: "A tagged vault alone cannot run typed integrity queries or collapse a hierarchy into a report"
+    type: rationale
+    properties:
+      tradeoffs: >-
+        Near-zero build cost and an instant eyes-on view; loses the two
+        things a graph earns its keep for here: design-rationale
+        relationships and collapsing a subtree into a review-grade report.
+    body: >-
+      A graph is only justified if you need design-rationale edges
+      (justifies/supersedes/contradicts) and report collapse; an
+      untyped tagged vault cannot do either, which is exactly what this
+      product needs.
+    edges:
+      justifies: ["Use an Obsidian vault with no custom server"]
+
+  # --- Architecture: supporting decisions ------------------------------------
+
+  - title: "Server stays thin and deterministic; organizing judgment lives in the calling agent"
+    type: decision
+    status: accepted
+    part_of: "Architecture"
+    body: >-
+      The MCP server exposes CRUD, query, traversal, and mechanical
+      similarity search; it never makes an LLM call on the hot path. Deciding
+      new-vs-update, proposing edges, and resolving ambiguity are the calling
+      agent's job, not the server's.
+    edges:
+      addresses: ["Server must stay deterministic with no hidden LLM calls on the hot path"]
+
+  - title: "Server must stay deterministic with no hidden LLM calls on the hot path"
+    type: requirement
+    part_of: "Architecture"
+    body: >-
+      No LLM call may be buried inside a tool: no second API key, no hidden
+      latency, no nondeterminism in something that must behave like a
+      database.
+
+  - title: "The calling agent already has reasoning and conversation context a server call would lack"
+    type: rationale
+    properties:
+      tradeoffs: >-
+        A weak non-Claude client gets a worse experience, since the
+        intelligence lives in the protocol it must follow rather than the
+        server; accepted because it keeps the server deterministic, testable,
+        and free of a second API key.
+    body: >-
+      The calling agent is better positioned than a server call to judge
+      "does this update node X or create a new one," because it already has
+      the reasoning capability and the live conversation context.
+    edges:
+      justifies: ["Server stays thin and deterministic; organizing judgment lives in the calling agent"]
+
+  - title: "Canonical store is plain text in Git; the SQLite index is derived and gitignored"
+    type: decision
+    status: accepted
+    part_of: "Architecture"
+    body: >-
+      One Markdown+frontmatter file per node is the canonical, portable,
+      diffable source of truth; the SQLite+FTS5+vector index is a disposable
+      query cache rebuilt from the text, never committed.
+    edges:
+      references: ["project-memory-graph-plan.md"]
+
+  - title: "Binary SQLite in Git produces no meaningful diffs and fatal merge conflicts"
+    type: rationale
+    body: >-
+      A binary database file rewrites wholesale on every write, so Git cannot
+      three-way-merge divergent copies and history bloats; text-per-node
+      fixes all three problems and Git LFS would only fix the bloat.
+    edges:
+      justifies: ["Canonical store is plain text in Git; the SQLite index is derived and gitignored"]
+
+  - title: "Do not stand up Neo4j; migrate later only if real graph analytics are needed"
+    type: decision
+    status: accepted
+    part_of: "Architecture"
+    body: >-
+      SQL recursive CTEs over the derived index handle traversal at the
+      stated scale (thousands of nodes); a graph database is deferred until a
+      concrete graph-analytical workload actually demands one.
+    edges:
+      references: ["memento-mcp prior art"]
+
+  - title: "Neo4j is operational burden for thousands of nodes with no graph-analytical workload"
+    type: rationale
+    body: >-
+      memento-mcp shows what a Neo4j-backed version of this looks like; at
+      this project's stated scale, the operational cost of running Neo4j
+      outweighs anything it would buy over recursive CTEs.
+    edges:
+      justifies: ["Do not stand up Neo4j; migrate later only if real graph analytics are needed"]
+
+  - title: "No task tracker; decision status and question nodes cover the design-thinking side"
+    type: decision
+    status: accepted
+    part_of: "Architecture"
+    body: >-
+      This graph does not track sprints or todos. `question.status` and
+      `decision.status` cover the open-vs-resolved lifecycle a design book
+      actually needs; a real tracker integrates separately if sprints are
+      ever required.
+
+  - title: "No remote hosting or multi-tenant auth in v1"
+    type: constraint
+    part_of: "Architecture"
+    body: >-
+      Local, single-project, single-user only. Remote Streamable HTTP and
+      auth are a same-schema Phase 4 concern, deferred until a concrete need
+      exists, because building it now is a likely way this project stalls.
+
+  - title: "sqlite-vec and FTS5 must be available at startup or the server fails fast"
+    type: constraint
+    part_of: "Architecture"
+    body: >-
+      Extension-loading and FTS5 support are environment properties, not
+      guaranteed on every Python build. The server asserts both at startup
+      and fails with a clear diagnostic rather than a confusing later error.
+
+  # --- Data model -------------------------------------------------------------
+
+  - title: "Node ids are ULIDs stored in a redundant id frontmatter key"
+    type: decision
+    status: superseded
+    part_of: "Data model"
+    body: >-
+      The build plan's original scheme: filenames are ULIDs, and an `id` key
+      inside the frontmatter duplicates it for lookups.
+
+  - title: "Filename stem is the node id; no separate ULID"
+    type: decision
+    status: accepted
+    part_of: "Data model"
+    body: >-
+      The sanitized title is both the filename and the id; there is no
+      separate `id` key. Obsidian reads this format natively, giving a free
+      eyes-on graph view.
+    edges:
+      supersedes: ["Node ids are ULIDs stored in a redundant id frontmatter key"]
+
+  - title: "One place the id lives removes the id-vs-filename desync bug class"
+    type: rationale
+    body: >-
+      A separate `id` key that could drift from the filename is a whole bug
+      class; making the filename stem the only id removes it structurally
+      instead of guarding against it.
+    edges:
+      justifies: ["Filename stem is the node id; no separate ULID"]
+
+  - title: "Edge values are quoted wikilink strings resolved case-insensitively"
+    type: decision
+    status: accepted
+    part_of: "Data model"
+    body: >-
+      Every edge target is written as a quoted `"[[Exact Title]]"` string.
+      Resolution against the current id set is case-insensitive and
+      NFC-normalized, matching Obsidian's own cross-platform link resolution.
+    edges:
+      references: ["python-frontmatter library source on GitHub"]
+
+  - title: "An unquoted wikilink is ambiguous YAML flow syntax that silently parses to a nested list"
+    type: rationale
+    body: >-
+      `part_of: [[Foo]]` unquoted is valid YAML flow-sequence-of-flow-sequence
+      syntax and silently parses to `[['Foo']]` — never raises. Quoting is
+      mandatory, not stylistic, and this is checked by a regression test that
+      asserts serialized bytes never contain an unquoted "[[".
+    edges:
+      justifies: ["Edge values are quoted wikilink strings resolved case-insensitively"]
+
+  - title: "Title collisions are a hard rejection, never an auto-suffix"
+    type: decision
+    status: accepted
+    part_of: "Data model"
+    body: >-
+      A colliding title raises CollisionError instead of silently writing
+      "Foo (2).md". The caller must pick a genuinely distinguishing title or
+      update the existing node — the same never-guess-on-ambiguity philosophy
+      the organizing protocol applies at the agent level.
+
+  - title: "A silently suffixed file is unreachable by its natural wikilink text"
+    type: rationale
+    body: >-
+      An auto-suffixed second file can never be linked to by typing its
+      natural title, which is exactly the hairball-by-stealth failure mode
+      the "never create silently on ambiguity" rule exists to prevent.
+    edges:
+      justifies: ["Title collisions are a hard rejection, never an auto-suffix"]
+
+  - title: "part_of is a scalar frontmatter key, never a list"
+    type: decision
+    status: accepted
+    part_of: "Data model"
+    body: >-
+      `part_of` holds exactly one quoted wikilink, not a YAML list — this
+      structurally enforces "at most one primary parent" instead of relying
+      on convention. A YAML list value for `part_of`, even one item, is a
+      malformed-frontmatter condition. All 8 other edge types are always
+      lists, even for one target.
+
+  - title: "justifies edges are stored on the rationale node, pointing at the decision it supports"
+    type: decision
+    status: accepted
+    part_of: "Data model"
+    body: >-
+      Direction convention: `justifies` lives on the rationale node's
+      frontmatter (src=rationale, dst=decision), so an inbound query at a
+      decision node ("what justifies this") is the natural way to attach
+      rationale in a report.
+
+  - title: "Storage design's justifies example is stored on a decision, not a rationale node"
+    type: observation
+    part_of: "Data model"
+    body: >-
+      The storage design's own frontmatter example shows a `justifies` edge
+      declared on the type=decision node, pointing at what reads as a
+      rationale claim — the opposite direction from the decision above, which
+      the server design's report-traversal logic explicitly depends on.
+    edges:
+      contradicts: ["justifies edges are stored on the rationale node, pointing at the decision it supports"]
+
+  - title: "PyYAML silently parses an unquoted wikilink as a nested list instead of raising"
+    type: observation
+    part_of: "Data model"
+    body: >-
+      Empirically verified: `yaml.safe_load('part_of: [[Foo]]')` returns
+      `{'part_of': [['Foo']]}` with no error. The same SafeLoader also parses
+      an unquoted ISO-8601 timestamp as a native `datetime`, which silently
+      reformats (T to space, Z to +00:00) on the next re-dump if not guarded.
+    edges:
+      derived_from: ["python-frontmatter library source on GitHub"]
+
+  - title: "Edge writes reject part_of cycles hard; cross-type mismatches are warnings only"
+    type: constraint
+    part_of: "Data model"
+    body: >-
+      `part_of` is schema-constrained to one scalar per node, so its graph is
+      a forest when acyclic and cycle detection is a single upward
+      parent-pointer walk, not a general graph algorithm. A `justifies` edge
+      not actually connecting a rationale and a decision (and other
+      cross-type mismatches) is surfaced as a warning on the write result,
+      never a blocked write.
+
+  - title: "Should rename_node rewrite wikilinks inside body prose, not just frontmatter"
+    type: question
+    status: open
+    part_of: "Data model"
+    body: >-
+      Only frontmatter-declared edges are indexed, so `rename_node` can only
+      rewrite those; an inline `[[wikilink]]` typed directly in another
+      node's body prose goes stale after a rename, currently just flagged by
+      a best-effort literal-text scan, not fixed. Undecided whether that scan
+      should become a real rewrite.
+
+  # --- Retrieval ----------------------------------------------------------
+
+  - title: "Hybrid retrieval fuses FTS5 and vector search by reciprocal rank"
+    type: decision
+    status: accepted
+    part_of: "Retrieval"
+    body: >-
+      `search_nodes` runs an FTS5 branch and a vector branch, fuses their
+      rankings by reciprocal rank fusion, and caps at k. The ranker is
+      deliberately not overthought further in v1.
+
+  - title: "Neither lexical nor semantic search alone covers both jargon and paraphrase"
+    type: rationale
+    body: >-
+      Semantic search catches "this is the same idea phrased differently,"
+      the core dedup case; lexical search catches exact identifiers and part
+      numbers the embedding model has never seen. Structured type/status
+      filters narrow both.
+    edges:
+      justifies: ["Hybrid retrieval fuses FTS5 and vector search by reciprocal rank"]
+
+  - title: "Embeddings are local via fastembed, cached by content hash, and gitignored"
+    type: decision
+    status: accepted
+    part_of: "Retrieval"
+    body: >-
+      A local ONNX CPU model (bge-small-en-v1.5) embeds node text; vectors
+      are cached by a content hash independent of the file-bytes hash the
+      projector uses, and are never committed to Git.
+
+  - title: "Local embeddings keep the design book private and free per call"
+    type: rationale
+    body: >-
+      A local model avoids sending private design content to a third-party
+      API and avoids a per-call cost on a workload that runs on every write.
+    edges:
+      justifies: ["Embeddings are local via fastembed, cached by content hash, and gitignored"]
+
+  - title: "Traversal uses recursive CTEs in SQLite with no networkx dependency"
+    type: decision
+    status: accepted
+    part_of: "Retrieval"
+    body: >-
+      `neighbors`, `get_subgraph`, and `assemble_report`'s spine walk are all
+      one cycle-guarded recursive CTE (roughly 15-20 lines of SQL) rather than
+      a Python graph library. part_of's single-parent-scalar rule alone makes
+      cycle detection a plain parent-pointer walk under 30 lines, well under
+      the bar that would justify adding networkx.
+
+  # --- Organizing protocol -------------------------------------------------
+
+  - title: "Ambiguous placement always asks the user instead of creating silently"
+    type: decision
+    status: accepted
+    part_of: "Organizing protocol"
+    body: >-
+      When a candidate node is related to an existing one but it's unclear
+      whether it's the same claim or genuinely distinct, the agent must stop
+      and ask, naming both, rather than guessing either way.
+
+  - title: "Silent creation on ambiguity is the direct cause of hairball graphs"
+    type: rationale
+    body: >-
+      Every "AI second brain" failure mode traces back to either an
+      undetected duplicate (never asked, created anyway) or an incorrect
+      merge (never asked, assumed same). Asking is cheap; a rotted graph is
+      not recoverable by more storage.
+    edges:
+      justifies: ["Ambiguous placement always asks the user instead of creating silently"]
+
+  - title: "Rejected alternatives are recorded as decision nodes with status rejected"
+    type: decision
+    status: accepted
+    part_of: "Organizing protocol"
+    body: >-
+      Every time an accepted decision resolves a real fork, the alternatives
+      that lost are captured too: their own decision node, status rejected,
+      addressing the same driver, each with its own justifying rationale.
+
+  - title: "Design-choice tables only exist if the road not taken enters the graph"
+    type: rationale
+    body: >-
+      A decision-choice table (option, status, rationale, tradeoffs) has
+      nothing to group if only winners were ever written down. Recording
+      rejected alternatives is what turns "we picked X" into a reviewable
+      design record.
+    edges:
+      justifies: ["Rejected alternatives are recorded as decision nodes with status rejected"]
+
+  - title: "Every batch of graph writes ends with a snapshot commit"
+    type: requirement
+    part_of: "Organizing protocol"
+    body: >-
+      After a full batch of graph mutations, the agent calls
+      `snapshot(message)` with a message describing what actually changed,
+      keeping the graph's Git history meaningful rather than a stream of
+      generic "update" commits.
+
+  - title: "Should merge_nodes auto-concatenate bodies instead of requiring a manual pre-step"
+    type: question
+    status: open
+    part_of: "Organizing protocol"
+    body: >-
+      merge_nodes is mechanical-only by design and never touches body text.
+      Mitigated procedurally by a required pre-step in the protocol (read the
+      drop candidate, fold in anything unique, then merge); still open
+      whether the server should ever do this automatically instead.
+
+  - title: "merge_nodes requires a manual body-preservation pre-step in the calling agent's protocol"
+    type: decision
+    status: accepted
+    part_of: "Organizing protocol"
+    body: >-
+      Before calling merge_nodes, the agent must get_node the drop candidate,
+      append anything unique to the keep node's body, and only then merge —
+      because merge_nodes itself never concatenates bodies and drop's body is
+      gone once it runs.
+    edges:
+      addresses: ["Should merge_nodes auto-concatenate bodies instead of requiring a manual pre-step"]
+
+  # --- Phased build plan ---------------------------------------------------
+
+  - title: "Phase 0 — canonical store and projector"
+    type: milestone
+    status: planned
+    part_of: "Phased build plan"
+    body: >-
+      Node-file (de)serialization plus the projector that builds the SQLite
+      index from the files, no embeddings yet. Accept: delete-index-and-
+      reindex reproduces identical query results; part_of cycles rejected;
+      dangling edges flagged, not dropped.
+
+  - title: "Phase 1 — MCP server and admin tools"
+    type: milestone
+    status: planned
+    part_of: "Phased build plan"
+    body: >-
+      Wrap Phase 0 in FastMCP write/read-traverse tools plus reindex and
+      snapshot. Accept: create nodes/edges and pull a subgraph over stdio;
+      snapshot commits; a clone-elsewhere-and-reindex round trip reproduces
+      the graph.
+    edges:
+      depends_on: ["Phase 0 — canonical store and projector"]
+
+  - title: "Phase 2 — retrieval"
+    type: milestone
+    status: planned
+    part_of: "Phased build plan"
+    body: >-
+      Add embeddings, FTS5, hybrid search_nodes and find_similar, and the
+      integrity tools. Accept: find_similar surfaces a paraphrase; search
+      finds an exact identifier; changing the embedding model re-embeds
+      cleanly.
+    edges:
+      depends_on: ["Phase 1 — MCP server and admin tools"]
+
+  - title: "Phase 3 — organizing protocol and reports"
+    type: milestone
+    status: planned
+    part_of: "Phased build plan"
+    body: >-
+      Add assemble_report and ship the organizing protocol as an MCP prompt
+      plus CLAUDE.md. Accept: a mixed dump organizes correctly with dedup and
+      a clarifying question; assemble_report yields a coherent report
+      bundle with decision tables.
+    edges:
+      depends_on: ["Phase 2 — retrieval"]
+
+  - title: "Phase 4 — deferred remote hosting and multi-tenant auth"
+    type: milestone
+    status: planned
+    part_of: "Phased build plan"
+    body: >-
+      Remote Streamable HTTP plus auth, multi-project namespacing, graph
+      export, and the optional curate(text) tool for weak clients — built
+      only once a concrete need for one of them exists.
+    edges:
+      depends_on: ["Phase 3 — organizing protocol and reports"]
+
+  # --- Artifacts (standalone: no part_of, reached via references/derived_from) --
+
+  - title: "project-memory-graph-plan.md"
+    type: artifact
+    body: >-
+      The build-plan document this graph is seeded from: the spec of record
+      for v1 scope, data model, retrieval design, tool surface, and phasing.
+
+  - title: "python-frontmatter library source on GitHub"
+    type: artifact
+    body: >-
+      eyeseast/python-frontmatter on GitHub, main branch. Its YAML dump
+      defaults (sort_keys, width, timestamp handling) were fetched and
+      verified directly rather than assumed, since they are load-bearing for
+      stable, zero-diff no-op writes.
+
+  - title: "memento-mcp prior art"
+    type: artifact
+    body: >-
+      A Neo4j-plus-vectors knowledge-graph MCP memory server, studied as
+      prior art for the semantic/temporal retrieval features while
+      deliberately choosing text-canonical-plus-SQLite over its graph-database
+      backend.

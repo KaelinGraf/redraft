@@ -1,0 +1,26 @@
+{
+  "name": "redraft-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:ship": "npm run build && rm -rf ../src/redraft/ui/static && mkdir -p ../src/redraft/ui/static && cp -r dist/* ../src/redraft/ui/static/",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.101.2",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-force-graph-2d": "1.29.1",
+    "react-router-dom": "7.18.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "typescript": "7.0.2",
+    "vite": "8.1.3"
+  }
+}

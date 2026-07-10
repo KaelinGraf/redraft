@@ -1,0 +1,17 @@
+/index/
+/.redraft.lock
+__pycache__/
+*.pyc
+.venv/
+.fastembed_cache/
+.pytest_cache/
+*.egg-info/
+
+# frontend/ is dev-time only (s6-ui.md §2/§7) -- its build OUTPUT is committed under
+# src/redraft/ui/static/ instead (see CLAUDE.md's "Rebuilding the UI" section)
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# device-specific dev config -- each dev points their own .mcp.json at their own graph
+.mcp.json
