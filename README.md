@@ -5,6 +5,12 @@
 AI-assisted project development and tracking: a living, typed design record for
 engineering projects, exposed to Claude Code (or any MCP client) over MCP.
 
+<img src="assets/tables_page.png" alt="redraft's decision tables: accepted and rejected alternatives side by side, grouped under the question each decision addresses" width="100%">
+
+*The decision record, as the operator UI renders it: every decision grouped under the
+question it addresses — accepted and rejected alternatives side by side, with rationale
+and tradeoffs. The road not taken stays part of the record.*
+
 ## Why
 
 Most project documentation is written as a design book: a linear narrative, drafted once,
@@ -77,6 +83,24 @@ claude mcp add --scope project -e REDRAFT_DIR=<abs graph dir> -e PYTHONPATH= --t
 has already polluted it -- an inherited entry can shadow redraft's own dependencies or
 autoload an incompatible plugin.
 
+## The operator UI
+
+`redraft ui` serves a local web app over the same graph: an outline-first three-pane
+view for reading and full authoring (create with live duplicate-detection hints, link,
+batch-link, reparent, merge, upload, snapshot), plus a live document render, the
+decision tables above, a dependency-aware milestone timeline, and a force-directed map.
+
+| | |
+|---|---|
+| <img src="assets/outline_page.png" alt="Outline: spine tree, node detail, and the attention strip of open questions and unjustified decisions"> *Outline — spine tree, node detail, attention strip* | <img src="assets/docs_page.png" alt="Doc view: the graph rendered as a living design document with type and status on every heading"> *Doc — the graph as a living design document* |
+| <img src="assets/timeline.png" alt="Timeline: Gantt-style milestones with dependency arrows and an unscheduled tray"> *Timeline — milestones with real dependencies* | <img src="assets/map.png" alt="Map: force-directed view of the whole graph"> *Map — the whole project, one connected graph* |
+
+Ask your assistant for a technical report and it renders the graph into a review-grade
+LaTeX document — decision tables, open questions, and all — saved under `reports/` and
+displayed typeset in the Reports tab:
+
+<img src="assets/report.png" alt="A LaTeX technical report generated from the graph, rendered in the Reports tab" width="100%">
+
 ## Session-start overview
 
 Every graph `redraft init` births ships with a Claude Code `SessionStart` hook
@@ -142,6 +166,15 @@ Restart your Claude Code session afterward so it picks up the refreshed protocol
   rationale, tradeoffs, and supersession chains already resolved -- accepted and rejected
   alternatives rendered side by side, so the road not taken is part of the record instead of
   lost to it.
+- **Versioning is local git commits**: every batch of graph writes ends in a `snapshot` —
+  a pathspec-scoped commit in the graph repo's own git history. Local commits *are* the
+  version history (diffable, revertable, blameable node-by-node); adding a remote and
+  pushing is optional and entirely yours to decide.
+- **Report generation, built in**: the organizing protocol every graph ships teaches the
+  driving assistant to collapse the graph into technical writeups — `assemble_report`
+  for the full spine with decision tables, `briefing(query)` for topical context — saved
+  as LaTeX under `reports/` and rendered in the operator UI. The `redraft-report` skill
+  packages the flow so "generate a technical report" is a one-liner.
 - **Saved reference material**: `docs/` is a local, gitignored cache of referenced research —
   re-fetchable on any device from the `source_url` recorded on its `artifact` node via the
   `redraft-fetch-docs` skill — not versioned, so it doesn't travel with the graph and keeps the
@@ -166,6 +199,11 @@ ln -s "$(pwd)/skills/redraft-init" ~/.claude/skills/redraft-init
 
 `skills/redraft-fetch-docs/SKILL.md` re-fetches a graph's local `docs/` cache (see above) from
 each artifact node's recorded `source_url`; symlink it the same way (`ln -s "$(pwd)/skills/redraft-fetch-docs" ~/.claude/skills/redraft-fetch-docs`).
+
+`skills/redraft-report/SKILL.md` packages the report flow: assemble the graph, write a
+grounded LaTeX technical report into `reports/`, snapshot it — so "generate a technical
+report" is a one-liner in any session with a redraft graph connected
+(`ln -s "$(pwd)/skills/redraft-report" ~/.claude/skills/redraft-report`).
 
 ## Running tests
 
