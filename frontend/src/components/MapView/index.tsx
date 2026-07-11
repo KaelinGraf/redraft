@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import ForceGraph2D, { type NodeObject } from "react-force-graph-2d";
+import ForceGraph2D, { type ForceGraphMethods, type NodeObject } from "react-force-graph-2d";
 import { useOutline } from "../../api/queries";
 import { buildNodeLink } from "../../lib/nav";
 import { nodeTypeColor } from "../../lib/palette";
@@ -17,19 +17,33 @@ import { EmptyState } from "../EmptyState";
 export default function MapView() {
   const { data, isPending, isError } = useOutline();
   const navigate = useNavigate();
-  const containerRef = useRef<HTMLDivElement>(null);
+  // A CALLBACK ref (not useRef+useEffect([])) because this div is gated behind isPending/
+  // isError/empty-state early returns below -- on a cold load the FIRST commit is one of those
+  // placeholders, so a mount-only effect would see containerRef.current === null and never
+  // re-run once the real .map-view div appears on a later render. A callback ref re-fires
+  // exactly when the node attaches, whichever render that happens on (the bug this replaces:
+  // the ResizeObserver never actually attached, so `size` stayed at its 600x400 fallback
+  // forever -- the graph rendering into a fixed small canvas pinned in the container's corner).
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  const fgRef = useRef<ForceGraphMethods<NodeObject<MapNode>> | undefined>(undefined);
+  const fittedRef = useRef(false); // re-arm on a fresh data load; NOT on every engine-stop (a
+  // node drag reheats the sim and re-fires onEngineStop too -- fitting then would yank the
+  // view out from under whatever the user was just doing)
   const [size, setSize] = useState({ width: 600, height: 400 });
 
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+    fittedRef.current = false;
+  }, [data]);
+
+  useEffect(() => {
+    if (!container) return;
     const observer = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
       setSize({ width: Math.max(width, 200), height: Math.max(height, 200) });
     });
-    observer.observe(el);
+    observer.observe(container);
     return () => observer.disconnect();
-  }, []);
+  }, [container]);
 
   const graphData = useMemo(() => {
     if (!data) return { nodes: [] as MapNode[], links: [] };
@@ -46,8 +60,9 @@ export default function MapView() {
   if (graphData.nodes.length === 0) return <EmptyState>No nodes yet.</EmptyState>;
 
   return (
-    <div className="map-view" ref={containerRef}>
+    <div className="map-view" ref={setContainer}>
       <ForceGraph2D<MapNode>
+        ref={fgRef}
         graphData={graphData}
         width={size.width}
         height={size.height}
@@ -55,6 +70,14 @@ export default function MapView() {
         nodeColor={(n: NodeObject<MapNode>) => nodeTypeColor(n.type)}
         linkColor={() => "rgba(150, 158, 170, 0.55)"}
         onNodeClick={(n: NodeObject<MapNode>) => navigate(buildNodeLink("outline", String(n.id)))}
+        cooldownTicks={200} // force-graph's alpha-based early-stop is off by default (d3AlphaMin=0),
+        // so onEngineStop otherwise only fires after its 15s wall-clock cooldownTime ceiling --
+        // an explicit tick cap settles (and fits) the view in ~3s at 60fps instead
+        onEngineStop={() => {
+          if (fittedRef.current) return;
+          fittedRef.current = true;
+          fgRef.current?.zoomToFit(0, 40); // instant (0ms) -- the app has no animations; this is a one-time layout fit, not a flourish
+        }}
       />
     </div>
   );

@@ -1,11 +1,11 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useOutline, useTimeline } from "../../api/queries";
 import { buildNodeLink } from "../../lib/nav";
 import { nodeTypeColor, statusColor } from "../../lib/palette";
 import { EmptyState } from "../EmptyState";
 import { TypeChip } from "../TypeChip";
-import { AXIS_HEIGHT, BAR_HEIGHT, DIAMOND_R, LABEL_BUFFER, ROW_HEIGHT, buildLayout, type PositionedItem } from "./layout";
+import { AXIS_HEIGHT, BAR_HEIGHT, DIAMOND_R, ROW_HEIGHT, buildLayout, type PositionedItem } from "./layout";
 import type { TimelineItem } from "../../api/types";
 
 /** CENTER, Timeline tab: /timeline -- Gantt-style milestone planning over the Planning dates
@@ -35,13 +35,30 @@ export default function TimelineView() {
   const { data: outline } = useOutline(); // already loaded for OutlinePane -- reused, not refetched, for part_of -> title
   const navigate = useNavigate();
 
+  // .timeline-scroll's own width (not the window's) -- px/day is derived from this so a short
+  // domain fills the actual plot area instead of the fixed-tier scale compressing it into a
+  // strip of dead space (s6-ui.md addendum: the tab is full-width now, so this container IS
+  // most of the available room). A CALLBACK ref, not useRef+useEffect([]) -- .timeline-scroll
+  // is gated behind the isPending early return below, so on a cold load the first commit is
+  // the loading placeholder and a mount-only effect would see scrollRef.current === null and
+  // never re-run once the real element appears on a later render (the bug this replaces: the
+  // observer never attached, so plotAreaWidth stayed at its fallback forever).
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const [plotAreaWidth, setPlotAreaWidth] = useState(1000);
+  useEffect(() => {
+    if (!scrollEl) return;
+    const observer = new ResizeObserver(([entry]) => setPlotAreaWidth(Math.max(320, entry.contentRect.width)));
+    observer.observe(scrollEl);
+    return () => observer.disconnect();
+  }, [scrollEl]);
+
   const titleById = useMemo(() => new Map((outline?.nodes ?? []).map((n) => [n.id, n.title])), [outline]);
   const titleFor = (id: string) => titleById.get(id) ?? id;
 
   const items = data?.items ?? [];
   const scheduled = useMemo(() => items.filter((i) => i.start || i.due), [items]);
   const unscheduled = useMemo(() => items.filter((i) => !i.start && !i.due), [items]);
-  const layout = useMemo(() => buildLayout(scheduled, titleFor), [scheduled, titleById]);
+  const layout = useMemo(() => buildLayout(scheduled, titleFor, plotAreaWidth), [scheduled, titleById, plotAreaWidth]);
 
   if (isPending) return <div className="spinner-line">Loading timeline…</div>;
   if (isError) return <EmptyState>Failed to load the timeline.</EmptyState>;
@@ -62,7 +79,7 @@ export default function TimelineView() {
               </div>
             ))}
           </div>
-          <div className="timeline-scroll">
+          <div className="timeline-scroll" ref={setScrollEl}>
             <svg width={layout.chartWidth} height={layout.chartHeight}>
               <defs>
                 <marker id="tl-arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -104,7 +121,7 @@ function TimelineMark({ p, onClick }: { p: PositionedItem; onClick: () => void }
       ) : (
         <polygon points={diamondPoints(p.x1, p.y)} fill={color} />
       )}
-      <foreignObject x={p.x2 + 6} y={p.y - ROW_HEIGHT / 2} width={LABEL_BUFFER - 10} height={ROW_HEIGHT}>
+      <foreignObject x={p.x2 + 6} y={p.y - ROW_HEIGHT / 2} width={p.labelWidth} height={ROW_HEIGHT}>
         <div className="timeline-mark__label">
           <span className="type-chip__dot" style={{ background: nodeTypeColor(p.item.type) }} />
           <span className="timeline-mark__text">{p.item.title}</span>

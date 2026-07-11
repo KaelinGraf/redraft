@@ -13,6 +13,8 @@ export const LANE_GAP = 14;
 export const AXIS_HEIGHT = 30;
 export const LABEL_BUFFER = 190; // trailing px reserved past the last tick for item labels
 const MAX_PLOT_WIDTH = 20000; // safety ceiling, well under common browser SVG rasterization limits
+const MIN_PX_PER_DAY = 5; // a multi-year domain scrolls horizontally at this density rather than compressing to an unreadable sliver
+const MAX_PX_PER_DAY = 220; // a near-zero-day domain still fills its container without stretching a single bar absurdly wide
 
 /** "YYYY-MM-DD" (or anything Date can parse) -> epoch ms, or null if missing/unparseable.
  * organizing-protocol.md's Planning dates convention is a CONVENTION -- nothing server-side
@@ -33,6 +35,7 @@ export interface PositionedItem {
   x1: number;
   x2: number; // === x1 for a diamond
   y: number; // absolute mid-row y within the whole chart, px
+  labelWidth: number; // px available for the trailing label before the next item in this sub-row
 }
 
 export interface Lane {
@@ -71,8 +74,10 @@ const EMPTY_LAYOUT: TimelineLayout = { chartWidth: 0, chartHeight: 0, lanes: [],
 /** `scheduled` = every item with at least one non-null start/due (caller filters; see
  * index.tsx). `titleFor` resolves a part_of id to its display title -- reuses the already-
  * loaded outline (id -> title), the same "look up a title, fall back to the raw id" idiom
- * NodeEdgesPanel already uses for edge endpoints. */
-export function buildLayout(scheduled: TimelineItem[], titleFor: (id: string) => string): TimelineLayout {
+ * NodeEdgesPanel already uses for edge endpoints. `containerWidth` is .timeline-scroll's
+ * measured pixel width (index.tsx, ResizeObserver) -- the scale is derived from it so a short
+ * domain fills the tab instead of rendering as a compressed strip in a sea of dead space. */
+export function buildLayout(scheduled: TimelineItem[], titleFor: (id: string) => string, containerWidth: number): TimelineLayout {
   type Prepped = { item: TimelineItem; kind: "bar" | "diamond"; startMs: number; endMs: number };
   const prepped: Prepped[] = [];
   const invalidDate: TimelineItem[] = [];
@@ -108,28 +113,32 @@ export function buildLayout(scheduled: TimelineItem[], titleFor: (id: string) =>
   const domainEnd = rawMax + padDays * DAY_MS;
   const totalDays = Math.max(1, Math.round((domainEnd - domainStart) / DAY_MS));
 
-  // Denser axis for long spans, roomier for short ones; a floor width keeps a short span from
-  // looking cramped in its own scrollable container (no page-level horizontal scroll -- the
-  // OUTER page never scrolls; .timeline-scroll owns overflow-x, per the build brief). scaleX
-  // maps the domain into plotWidth only, NOT the full chartWidth -- LABEL_BUFFER reserves a
-  // trailing strip past the last tick so an item's title label (rendered after its bar/
-  // diamond, per s6-ui.md IA: "truncate + tooltip") has room to draw for items near the right
-  // edge instead of being clipped by the svg's own bounds.
-  // Capped at MAX_PLOT_WIDTH -- the same fat-fingered-year typo that motivates MAX_TICKS
-  // above (buildTicks) would otherwise ask for a millions-of-pixels-wide <svg>, which is well
-  // past what browsers reliably rasterize (common engine ceilings sit in the ~32,767px
-  // neighborhood) and would be unusably slow to lay out regardless. Capping here just means a
-  // few pixels represent more days for an already-nonsensical range -- graceful degradation,
-  // not a correctness change for any real project's span.
-  const pxPerDay = totalDays > 180 ? 5 : totalDays > 60 ? 10 : totalDays > 21 ? 20 : 32;
-  const plotWidth = Math.min(MAX_PLOT_WIDTH, Math.max(640, Math.round(totalDays * pxPerDay)));
+  // px/day is derived from the ACTUAL container width, not a fixed tier -- a short domain (a
+  // 6-day sprint) should fill the tab, not render as a ~500px strip in a 1650px container. The
+  // available plot width is containerWidth minus LABEL_BUFFER (the trailing strip reserved past
+  // the last tick for item labels, same role it always had -- scaleX maps the domain into
+  // plotWidth only, not the full chartWidth). Clamped both ways: MIN_PX_PER_DAY keeps a
+  // multi-year domain from compressing to nothing (it scrolls horizontally in .timeline-scroll
+  // instead, which owns overflow-x -- the OUTER page never scrolls, per the build brief);
+  // MAX_PX_PER_DAY stops a degenerate near-zero-day domain from stretching a bar to hundreds of
+  // px on an ultrawide monitor. Capped again at MAX_PLOT_WIDTH -- the same fat-fingered-year
+  // typo that motivates MAX_TICKS below would otherwise ask for a millions-of-pixels-wide
+  // <svg>, past what browsers reliably rasterize (common engine ceilings sit in the ~32,767px
+  // neighborhood).
+  const availablePlotWidth = Math.max(320, containerWidth - LABEL_BUFFER);
+  const pxPerDay = Math.min(MAX_PX_PER_DAY, Math.max(MIN_PX_PER_DAY, availablePlotWidth / totalDays));
+  const plotWidth = Math.min(MAX_PLOT_WIDTH, Math.max(availablePlotWidth, Math.round(totalDays * pxPerDay)));
   const chartWidth = plotWidth + LABEL_BUFFER;
   const scaleX = (ms: number) => ((ms - domainStart) / (domainEnd - domainStart)) * plotWidth;
-  const ticks = buildTicks(domainStart, domainEnd, scaleX, spanDays > 120);
+  const granularity = totalDays > 120 ? "month" : totalDays > 21 ? "week" : "day";
+  const ticks = buildTicks(domainStart, domainEnd, scaleX, granularity);
 
-  // Group into swimlanes by part_of (null -> "Ungrouped", sorted last); within each lane,
-  // greedy interval-packing assigns overlapping items to separate sub-rows so bars/diamonds
-  // that share a time range never visually collide.
+  // Group into swimlanes by part_of (null -> "Ungrouped", sorted last). ONE ROW PER ITEM within
+  // a lane -- vertical space in a scrolling tab is cheap, and packing by BAR extent alone (the
+  // previous approach) is label-blind: two items disjoint in time but close together still have
+  // trailing title text, so packing them into the same sub-row let one item's label run straight
+  // over the next item's bar/label (the reported mangled-overlapping-text bug). One row per item
+  // sidesteps the problem entirely instead of trying to compute label pixel extents up front.
   const byKey = new Map<string, Prepped[]>();
   for (const p of prepped) {
     const key = p.item.part_of ?? "";
@@ -143,29 +152,22 @@ export function buildLayout(scheduled: TimelineItem[], titleFor: (id: string) =>
   const lanes: Lane[] = [];
   const positionedById = new Map<string, PositionedItem>();
   let y = AXIS_HEIGHT;
+  const maxLabelWidth = LABEL_BUFFER - 10; // matches the foreignObject width this replaces (was a flat constant)
   for (const key of orderedKeys) {
     const laneItems = byKey.get(key)!.slice().sort((a, b) => a.startMs - b.startMs);
-    const subRowEnds: number[] = []; // subRowEnds[i] = end ms of the last item placed in sub-row i
-    const positioned: PositionedItem[] = [];
-    for (const p of laneItems) {
-      let row = subRowEnds.findIndex((endMs) => endMs + DAY_MS / 2 <= p.startMs);
-      if (row === -1) {
-        row = subRowEnds.length;
-        subRowEnds.push(p.endMs);
-      } else {
-        subRowEnds[row] = p.endMs;
-      }
+    const positioned: PositionedItem[] = laneItems.map((p, row) => {
       const posItem: PositionedItem = {
         item: p.item,
         kind: p.kind,
         x1: scaleX(p.startMs),
         x2: scaleX(p.endMs),
         y: y + row * ROW_HEIGHT + ROW_HEIGHT / 2,
+        labelWidth: maxLabelWidth,
       };
-      positioned.push(posItem);
       positionedById.set(p.item.id, posItem);
-    }
-    const height = Math.max(1, subRowEnds.length) * ROW_HEIGHT;
+      return posItem;
+    });
+    const height = Math.max(1, laneItems.length) * ROW_HEIGHT;
     lanes.push({ key, title: key === "" ? "Ungrouped" : titleFor(key), y, height, items: positioned });
     y += height + LANE_GAP;
   }
@@ -174,25 +176,93 @@ export function buildLayout(scheduled: TimelineItem[], titleFor: (id: string) =>
   // Dependency arrows: prerequisite -> dependent, drawn only when BOTH endpoints landed a
   // pixel position above (i.e. neither is unscheduled or invalid-date) -- skipped gracefully
   // otherwise, never a dangling/off-chart arrow.
-  const arrows: Arrow[] = [];
+  const validDeps: { from: string; to: string }[] = [];
   for (const p of prepped) {
-    const to = positionedById.get(p.item.id)!;
     for (const prereqId of p.item.depends_on) {
-      const from = positionedById.get(prereqId);
-      if (!from) continue;
-      arrows.push({ key: `${prereqId}->${p.item.id}`, d: arrowPath(from.x2, from.y, to.x1, to.y) });
+      if (positionedById.has(prereqId)) validDeps.push({ from: prereqId, to: p.item.id });
     }
   }
+  // Multiple arrows can leave the same source or converge on the same target (a milestone
+  // blocking three others, or blocked by three others) -- fan each one out across its node's
+  // own edge instead of every arrow meeting at one center point (the reported "pile onto the
+  // same point" bug).
+  const outgoing = new Map<string, string[]>();
+  const incoming = new Map<string, string[]>();
+  for (const { from, to } of validDeps) {
+    const o = outgoing.get(from);
+    if (o) o.push(to);
+    else outgoing.set(from, [to]);
+    const i = incoming.get(to);
+    if (i) i.push(from);
+    else incoming.set(to, [from]);
+  }
+  const arrows: Arrow[] = validDeps.map(({ from, to }) => {
+    const src = positionedById.get(from)!;
+    const dst = positionedById.get(to)!;
+    const srcHalf = (src.kind === "diamond" ? DIAMOND_R : BAR_HEIGHT / 2) * 0.7;
+    const dstHalf = (dst.kind === "diamond" ? DIAMOND_R : BAR_HEIGHT / 2) * 0.7;
+    const outs = outgoing.get(from)!;
+    const ins = incoming.get(to)!;
+    const exitY = src.y + fanOffset(outs.indexOf(to), outs.length, srcHalf);
+    const entryY = dst.y + fanOffset(ins.indexOf(from), ins.length, dstHalf);
+    // Leave from the source's own right edge (a diamond's edge is DIAMOND_R past its center,
+    // not the center itself) and enter the target's left edge -- never the bar/diamond centers,
+    // which is what produced the old center-to-center diagonals stabbing through bars.
+    const exitX = src.kind === "diamond" ? src.x2 + DIAMOND_R : src.x2;
+    const entryX = dst.kind === "diamond" ? dst.x1 - DIAMOND_R : dst.x1;
+    const key = `${from}->${to}`;
+    return { key, d: arrowPath(exitX, exitY, entryX, entryY, key) };
+  });
 
   return { chartWidth, chartHeight, lanes, ticks, arrows, invalidDate };
 }
 
-/** A smooth S-curve between two points, horizontal at both ends -- reads cleanly whether the
- * two items share a lane (y1 === y2, degenerates to a straight horizontal line) or sit in
- * different lanes (curves gracefully across the lanes between them, per the build brief). */
-function arrowPath(x1: number, y1: number, x2: number, y2: number): string {
-  const midX = (x1 + x2) / 2;
-  return `M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}`;
+/** Spreads N siblings sharing one node edge across a small band centered on that edge's own
+ * midpoint, so arrows fanning in/out of the same bar/diamond land at distinct points instead of
+ * a single shared one. A lone arrow (n<=1) gets no offset -- the common case renders exactly as
+ * before. */
+function fanOffset(index: number, count: number, halfSpan: number): number {
+  if (count <= 1) return 0;
+  const step = (halfSpan * 2) / (count - 1);
+  return -halfSpan + index * step;
+}
+
+const ARROW_STUB = 12; // px an arrow travels straight out of its source / into its target before bending
+const ARROW_CLEARANCE = 10; // extra px (past the bar's own half-height) an arrow detours before crossing a row
+
+/** Deterministic small nudge (-2..2px) from an arrow's key -- keeps two otherwise-identical
+ * elbows (same source row, same target row) from rendering as one indistinguishable line. Not
+ * cryptographic, just needs to be stable across renders. */
+function hashOffset(key: string, mod: number): number {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
+  return Math.abs(h) % mod;
+}
+
+/** Orthogonal elbow from a source's right edge to a target's left edge -- always leaves/enters
+ * horizontally, never a center-to-center diagonal cutting through the bar rectangles in between.
+ *
+ * Same row (y1 === y2) and the target is at or after the source: a plain horizontal line, which
+ * is already the cleanest possible reading.
+ *
+ * Otherwise, if the target sits comfortably to the right, a standard 3-segment bend (out, over,
+ * in) reads cleanest for a Gantt. If it doesn't -- either a genuinely "backwards" dependency
+ * (the blocking item is scheduled LATER on the axis than what it blocks, a real shape in this
+ * data) or just too little horizontal room for a clean bend -- detour above or below the
+ * source's own row first, so the return leg travels through the row's margin instead of back
+ * through the source bar's fill. */
+function arrowPath(x1: number, y1: number, x2: number, y2: number, key: string): string {
+  if (Math.abs(y1 - y2) < 0.5 && x2 >= x1) return `M${x1},${y1} L${x2},${y2}`;
+
+  const jitter = hashOffset(key, 5) - 2;
+  if (x2 - x1 >= ARROW_STUB * 2) {
+    const midX = (x1 + x2) / 2 + jitter;
+    return `M${x1},${y1} L${midX},${y1} L${midX},${y2} L${x2},${y2}`;
+  }
+  const detourY = y1 + Math.sign(y2 - y1 || 1) * (BAR_HEIGHT / 2 + ARROW_CLEARANCE) + jitter;
+  const outX = x1 + ARROW_STUB;
+  const inX = x2 - ARROW_STUB;
+  return `M${x1},${y1} L${outX},${y1} L${outX},${detourY} L${inX},${detourY} L${inX},${y2} L${x2},${y2}`;
 }
 
 // Hard safety cap, independent of the weekly/monthly spacing choice below -- a single
@@ -202,18 +272,18 @@ function arrowPath(x1: number, y1: number, x2: number, y2: number): string {
 // (a full year of weekly ticks is ~52); this only ever engages for already-nonsensical input.
 const MAX_TICKS = 200;
 
-function buildTicks(startMs: number, endMs: number, scaleX: (ms: number) => number, monthly: boolean): Tick[] {
+function buildTicks(startMs: number, endMs: number, scaleX: (ms: number) => number, granularity: "day" | "week" | "month"): Tick[] {
   const ticks: Tick[] = [];
   const cur = new Date(startMs);
   cur.setHours(0, 0, 0, 0);
-  if (monthly) {
+  if (granularity === "month") {
     cur.setDate(1);
     if (cur.getTime() < startMs) cur.setMonth(cur.getMonth() + 1);
     while (cur.getTime() <= endMs && ticks.length < MAX_TICKS) {
       ticks.push({ x: scaleX(cur.getTime()), label: cur.toLocaleDateString(undefined, { month: "short", year: "numeric" }) });
       cur.setMonth(cur.getMonth() + 1);
     }
-  } else {
+  } else if (granularity === "week") {
     const mondayOffset = (cur.getDay() + 6) % 7; // Date.getDay(): 0=Sun -> align back to Monday
     cur.setDate(cur.getDate() - mondayOffset);
     while (cur.getTime() <= endMs && ticks.length < MAX_TICKS) {
@@ -221,6 +291,13 @@ function buildTicks(startMs: number, endMs: number, scaleX: (ms: number) => numb
         ticks.push({ x: scaleX(cur.getTime()), label: cur.toLocaleDateString(undefined, { month: "short", day: "numeric" }) });
       }
       cur.setDate(cur.getDate() + 7);
+    }
+  } else {
+    // Short domain (<= ~21 days, s6-ui.md addendum) -- one tick per calendar day, no alignment
+    // needed since every day in range is shown.
+    while (cur.getTime() <= endMs && ticks.length < MAX_TICKS) {
+      ticks.push({ x: scaleX(cur.getTime()), label: cur.toLocaleDateString(undefined, { month: "short", day: "numeric" }) });
+      cur.setDate(cur.getDate() + 1);
     }
   }
   return ticks;
