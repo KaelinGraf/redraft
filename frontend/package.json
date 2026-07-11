@@ -11,10 +11,15 @@
   },
   "dependencies": {
     "@tanstack/react-query": "5.101.2",
+    "@unified-latex/unified-latex-to-hast": "^1.8.4",
+    "@unified-latex/unified-latex-util-parse": "^1.8.4",
+    "katex": "^0.17.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "react-force-graph-2d": "1.29.1",
-    "react-router-dom": "7.18.1"
+    "react-router-dom": "7.18.1",
+    "rehype-stringify": "^9.0.4",
+    "unified": "^10.1.2"
   },
   "devDependencies": {
     "@types/react": "19.2.17",

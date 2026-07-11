@@ -38,6 +38,19 @@ async def test_reports_listing_shape(ui_client, graph_dir):
     assert body[0]["modified_at"]
 
 
+async def test_reports_listing_includes_tex_alongside_md(ui_client, graph_dir):
+    """.tex is a first-class report file, listed alongside .md (organizing-protocol.md §7)."""
+    reports_dir = graph_dir / "reports"
+    reports_dir.mkdir()
+    (reports_dir / "2026-01-01-review.md").write_text("# Review\n\nBody text.\n")
+    (reports_dir / "2026-02-02-design.tex").write_text("\\section{Design}\n")
+
+    r = await ui_client.get("/api/reports")
+    assert r.status_code == 200
+    filenames = {f["filename"] for f in r.json()}
+    assert filenames == {"2026-01-01-review.md", "2026-02-02-design.tex"}
+
+
 async def test_read_report_returns_content(ui_client, graph_dir):
     reports_dir = graph_dir / "reports"
     reports_dir.mkdir()
@@ -46,6 +59,16 @@ async def test_read_report_returns_content(ui_client, graph_dir):
     r = await ui_client.get("/api/reports/notes.md")
     assert r.status_code == 200
     assert r.json() == {"filename": "notes.md", "content": "# Notes\n\nHello.\n"}
+
+
+async def test_read_report_returns_tex_content(ui_client, graph_dir):
+    reports_dir = graph_dir / "reports"
+    reports_dir.mkdir()
+    (reports_dir / "design.tex").write_text("\\section{Design}\n\nBody.\n")
+
+    r = await ui_client.get("/api/reports/design.tex")
+    assert r.status_code == 200
+    assert r.json() == {"filename": "design.tex", "content": "\\section{Design}\n\nBody.\n"}
 
 
 async def test_read_report_missing_file_404(ui_client, graph_dir):

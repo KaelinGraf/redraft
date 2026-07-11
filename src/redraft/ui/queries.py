@@ -173,13 +173,17 @@ def dedup_hints(
 
 
 def list_reports(reports_dir: Path) -> list[ReportFile]:
-    """GET /api/reports: Path.glob("*.md") + stat() over reports/ -- nothing existing lists
-    this directory (s6-ui.md §9). [] (not an error) if reports/ doesn't exist yet -- no report
-    has ever been saved, which is a legitimate, common state, not a fault."""
+    """GET /api/reports: Path.glob("*.md") + Path.glob("*.tex") + stat() over reports/ --
+    nothing existing lists this directory (s6-ui.md §9). Formal technical reports are authored
+    as LaTeX (.tex, rendered in the operator UI); lightweight summaries may stay markdown --
+    both are first-class report files (organizing-protocol.md §7). [] (not an error) if
+    reports/ doesn't exist yet -- no report has ever been saved, which is a legitimate, common
+    state, not a fault."""
     if not reports_dir.is_dir():
         return []
     out = []
-    for path in sorted(reports_dir.glob("*.md")):
+    paths = sorted({*reports_dir.glob("*.md"), *reports_dir.glob("*.tex")}, key=lambda p: p.name)
+    for path in paths:
         st = path.stat()
         out.append(
             ReportFile(

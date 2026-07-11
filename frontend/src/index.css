@@ -902,3 +902,125 @@ table.decision-table th {
 .timeline-tray__badge {
   margin-left: 6px;
 }
+
+/* ---------- .tex report rendering (ReportTexView) ---------- */
+
+/* Deliberately fixed light "paper" colors in BOTH themes, not --bg/--text vars: this is a
+ * document-on-paper metaphor, not a themed app panel -- the same reason a PDF viewer's page
+ * stays white regardless of the surrounding app's dark mode. unified-latex-to-hast's output
+ * (.tex-render below) is otherwise fully unstyled HTML we own end to end, so full
+ * prefers-color-scheme theming of the rendered body was an option; paper is a deliberate
+ * choice, not a fallback for CSS we couldn't override. var(--shadow) still adapts per theme
+ * so the card reads as "lifted" off either background. */
+.tex-paper {
+  background: #fdfdfa;
+  color: #1d1d1d;
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 36px 44px;
+  margin-bottom: 20px;
+}
+
+.tex-render {
+  font-family: Georgia, "Times New Roman", Cambria, serif;
+  font-size: 14.5px;
+  line-height: 1.6;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.tex-render h3 {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 28px 0 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #d8d4c8;
+}
+
+.tex-render h3:first-child {
+  margin-top: 0;
+}
+
+.tex-render h4 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 20px 0 8px;
+}
+
+.tex-render h5 {
+  font-size: 14.5px;
+  font-weight: 700;
+  font-style: italic;
+  margin: 16px 0 6px;
+}
+
+.tex-render p {
+  margin: 0 0 12px;
+}
+
+.tex-render ul,
+.tex-render ol {
+  margin: 0 0 12px;
+  padding-left: 28px;
+}
+
+.tex-render li {
+  margin-bottom: 6px;
+}
+
+.tex-render li p {
+  margin: 0;
+}
+
+.tex-render blockquote {
+  margin: 0 0 12px;
+  padding: 4px 16px;
+  border-left: 3px solid #c7c2b3;
+  color: #3a3a3a;
+  font-style: italic;
+}
+
+.tex-render table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 4px 0 16px;
+  font-size: 13px;
+}
+
+.tex-render td {
+  border: 1px solid #d8d4c8;
+  padding: 6px 8px;
+  vertical-align: top;
+  text-align: left;
+}
+
+.tex-render tr:first-child td {
+  background: #f0eee6;
+}
+
+.tex-render code.verb {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: #f0eee6;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* Fallback for a macro/environment this LaTeX subset doesn't recognize -- flagged rather
+ * than silently blended into normal text, so a bad .tex file is visibly incomplete instead
+ * of quietly wrong (never a blank pane, per the product requirement -- see also
+ * ReportTexView's renderError path for a hard parse failure). Every environment (recognized
+ * or not) carries an "environment" class, but an unrecognized one is specifically the only
+ * case rendered as a bare <div> -- quote/center/etc all get their own real tag
+ * (blockquote/...), so `div.environment` alone is the unrecognized-environment signal. */
+.tex-render .macro,
+.tex-render div.environment {
+  outline: 1px dashed #c9847a;
+  outline-offset: 2px;
+}
+
+.tex-render .display-math {
+  margin: 12px 0;
+  text-align: center;
+  overflow-x: auto;
+}

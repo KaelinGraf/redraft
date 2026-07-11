@@ -4,7 +4,7 @@ import { NodeDetail } from "./components/NodeDetail";
 import { DocView } from "./components/DocView";
 import { TablesView } from "./components/TablesView";
 import { ReportsView } from "./components/ReportsView";
-import { ReportMarkdownView } from "./components/ReportsView/ReportMarkdownView";
+import { ReportView } from "./components/ReportsView/ReportView";
 
 // MapView and TimelineView both render lazily -- only mounted (and only fetched as their own
 // JS chunk) when their route is actually active (s6-ui.md §10.1/§11 for Map; same reasoning
@@ -43,7 +43,7 @@ export function AppRoutes() {
         }
       />
       <Route path="/reports" element={<ReportsView />} />
-      <Route path="/reports/:filename" element={<ReportMarkdownView />} />
+      <Route path="/reports/:filename" element={<ReportView />} />
       <Route path="*" element={<Navigate to="/outline" replace />} />
     </Routes>
   );

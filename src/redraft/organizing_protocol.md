@@ -441,9 +441,15 @@ writeup rather than silently omitting it — a gap is a finding, not an
 embarrassment to hide.
 
 If the writeup is worth keeping, save it under `reports/` in the graph repo
-(e.g. `reports/2026-07-08-architecture-review.md`) before your next
-`snapshot` — that directory is exactly what `snapshot`'s pathspec includes
-(§3.8), so it version-controls alongside the graph that produced it.
+before your next `snapshot` — that directory is exactly what `snapshot`'s
+pathspec includes (§3.8), so it version-controls alongside the graph that
+produced it. **Formal technical reports are authored as LaTeX**
+(`reports/2026-07-08-architecture-review.tex`, `\section`/`\subsection`
+structure, decision tables as `tabular`) — the operator UI's Reports tab
+renders `.tex` in-app, with a raw-source toggle, so the LaTeX document *is*
+the deliverable, not an intermediate format. Lightweight, ad-hoc summaries
+(the `/summary` command below) may stay markdown — the bar for LaTeX is a
+report meant to be read as a standalone document, not a quick status note.
 
 **When the operator asks for a project summary** (types `/summary`, or asks for
 a "component-by-component overview"): this is a distinct, repeatable command,
