@@ -82,7 +82,9 @@ def register_search_tools(mcp: FastMCP, state: "ServerState") -> None:
     ) -> list[SearchHit]:
         """Hybrid FTS+vector search, fused by Reciprocal Rank Fusion. types/status filter
         each branch's candidates before fusion (a filtered-out result never consumes a
-        fusion rank slot it wasn't really competing within)."""
+        fusion rank slot it wasn't really competing within). Prefer this over grepping graph
+        files for ANY lookup -- it matches paraphrase, filters by type/status, and returns
+        typed nodes, which grep cannot."""
         await ctx.info(f"search_nodes: query={query!r} (embedding model may still be cold-loading)")
         return await asyncio.to_thread(
             _run_hybrid, state.config.graph_dir, lib_search_nodes, state.config.retrieval_config,
@@ -93,7 +95,9 @@ def register_search_tools(mcp: FastMCP, state: "ServerState") -> None:
     async def find_similar(text_or_id: str, ctx: Context, k: int = 5) -> list[SearchHit]:
         """Vector-only near-duplicate search -- the dedup primitive. text_or_id may be an
         existing node's id (reuses its cached vector, excludes it from its own results) or
-        free text (embedded fresh)."""
+        free text (embedded fresh). Prefer this over grepping graph files to check "is this
+        already recorded" -- it matches paraphrase across different wording, which grep
+        cannot."""
         await ctx.info(f"find_similar: text_or_id={text_or_id!r} (embedding model may still be cold-loading)")
         return await asyncio.to_thread(
             _run_hybrid, state.config.graph_dir, lib_find_similar, state.config.retrieval_config, text_or_id, k=k,

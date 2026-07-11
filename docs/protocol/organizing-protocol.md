@@ -181,6 +181,35 @@ bolted onto a specific node through the operator UI's Upload dialog (the
 graph; `docs/` is a gitignored, re-fetchable cache of external source material
 and is not.
 
+### Reading the graph (before you look anything up)
+
+**HARD RULE: retrieval goes through the tools, never through `grep`/`Read` on
+`graph/nodes/*.md`.** Whenever you're answering a question about the project,
+checking whether something is already recorded, or pulling context around a
+topic, reach for:
+
+- `search_nodes` — topical/hybrid search across the graph.
+- `find_similar` — "is this already recorded" / near-duplicate check.
+- `get_node` / `neighbors` — one node, or the context immediately around it.
+- `briefing(query)` — guidance questions ("what do we know about X"): search
+  hits, their 1-hop neighborhood, open questions, and unjustified decisions,
+  scoped to the topic, in one call.
+- `overview` — the project's shape: spine roots, branches, per-branch tallies.
+
+**Why this is a hard rule, not a style preference:** `grep` sees text, not the
+graph. It has no notion of paraphrase (a claim recorded in different words is
+invisible to it), of typed structure (node type, status), of the edges that
+connect a decision to its rationale and its rejected alternatives, or of the
+integrity surface (is this decision justified, is this question still open).
+It returns raw lines stripped of exactly the relationships that make an
+answer trustworthy — the retrieval tools return the node *and* that context
+together. There is no cost tradeoff excusing the shortcut either: the index
+is local and the embedder is pre-warmed, so these calls are millisecond-cheap.
+
+**Exceptions:** debugging the store or index themselves (you genuinely need
+the raw frontmatter), or the operator explicitly asks you to look at the raw
+files.
+
 ---
 
 ## 3. The core loop — run this on every freeform dump

@@ -57,7 +57,9 @@ def register_report_tools(mcp: FastMCP, state: "ServerState") -> None:
     @mcp.tool
     def briefing(query: str, k: int = 5) -> BriefingResult:
         """One-call topic guidance: hybrid search hits, their 1-hop neighborhood, open
-        questions, and unjustified decisions scoped to the topic."""
+        questions, and unjustified decisions scoped to the topic. Prefer this over grepping
+        graph files for "what do we know about X" -- it returns the matched nodes together
+        with their neighborhood and open gaps, which grep cannot assemble."""
         with open_conn(state.config.graph_dir) as conn:
             return lib_briefing(conn, state.config.retrieval_config, query, k=k)
 
@@ -66,7 +68,9 @@ def register_report_tools(mcp: FastMCP, state: "ServerState") -> None:
         """Cheap, shallow map of the project's shape: every spine root, each root's direct
         part_of children as branches with per-subtree tallies (descendants, open questions,
         decisions by status, unjustified decisions), whole-graph totals, and the top open
-        questions. Call this (or read graph://project/overview) at the start of a session,
+        questions. Prefer this over grepping graph files for the project's shape -- it returns
+        the spine structure and tallies in one cheap call, which grep cannot compute.
+        Call this (or read graph://project/overview) at the start of a session,
         before anything else, to load the project's shape and make your first real call
         targeted instead of blind."""
         with index_read_conn(state.config.graph_dir) as conn:
