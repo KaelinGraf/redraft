@@ -2,7 +2,7 @@
 
 # redraft
 
-AI-assisted project development and tracking: a living, typed design record for
+AI-assisted project development and tracking: a typed, versioned design record for
 engineering projects, exposed to Claude Code (or any MCP client) over MCP.
 
 <img src="assets/tables_page.png" alt="redraft's decision tables: accepted and rejected alternatives side by side, grouped under the question each decision addresses" width="100%">
@@ -92,7 +92,7 @@ decision tables above, a dependency-aware milestone timeline, and a force-direct
 
 | | |
 |---|---|
-| <img src="assets/outline_page.png" alt="Outline: spine tree, node detail, and the attention strip of open questions and unjustified decisions"> *Outline — spine tree, node detail, attention strip* | <img src="assets/docs_page.png" alt="Doc view: the graph rendered as a living design document with type and status on every heading"> *Doc — the graph as a living design document* |
+| <img src="assets/outline_page.png" alt="Outline: spine tree, node detail, and the attention strip of open questions and unjustified decisions"> *Outline — spine tree, node detail, attention strip* | <img src="assets/docs_page.png" alt="Doc view: the graph rendered as a design document with type and status on every heading"> *Doc — the graph, rendered as a design document* |
 | <img src="assets/timeline.png" alt="Timeline: Gantt-style milestones with dependency arrows and an unscheduled tray"> *Timeline — milestones with real dependencies* | <img src="assets/map.png" alt="Map: force-directed view of the whole graph"> *Map — the whole project, one connected graph* |
 
 Ask your assistant for a technical report and it renders the graph into a review-grade

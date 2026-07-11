@@ -1,7 +1,7 @@
 [project]
 name = "redraft"
 version = "0.1.0"
-description = "AI-assisted project development and tracking: a living, typed design record for engineering projects, exposed over MCP."
+description = "AI-assisted project development and tracking: a typed, versioned design record for engineering projects, exposed over MCP."
 readme = "README.md"
 authors = [
     { name = "Kaelin Graf" }
