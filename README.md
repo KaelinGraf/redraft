@@ -3,7 +3,7 @@
 # redraft
 
 AI-assisted project development and tracking: a typed, versioned design record for
-engineering projects, exposed to Claude Code (or any MCP client) over MCP.
+engineering projects, driven by your agent over MCP.
 
 <img src="assets/tables_page.png" alt="redraft's decision tables: accepted and rejected alternatives side by side, grouped under the question each decision addresses" width="100%">
 
@@ -20,7 +20,7 @@ at wildly different levels of a project's hierarchy, at different times, and the
 become useful once linked back to what they addressed, what they ruled out, and what they
 later superseded. redraft treats that as the real shape of the data instead of fighting it:
 typed nodes and typed edges, stored as plain Markdown so git stays the source of truth. An
-MCP server gives Claude Code the tools to organize the graph as the project evolves; reports
+MCP server gives your agent the tools to organize the graph as the project evolves; reports
 collapse it back into review-grade documents on demand -- including the roads not taken.
 
 ## Quickstart
