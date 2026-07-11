@@ -4,6 +4,7 @@ import { useActiveTab, buildNodeLink } from "../../lib/nav";
 import { Link } from "react-router-dom";
 import { EmptyState } from "../EmptyState";
 import { TypeChip } from "../TypeChip";
+import { StatusBadge } from "../StatusIndicator";
 import type { ReportSection } from "../../api/types";
 
 /** CENTER, Doc tab: /doc/:rootId -- renders ReportBundle.sections recursively (s6-ui.md
@@ -49,15 +50,23 @@ function SectionNode({ section, activeTab }: { section: ReportSection; activeTab
   const fontSize = Math.max(19 - section.depth * 2, 13);
   return (
     <div className="section-node">
-      <div style={{ fontSize, fontWeight: 700, margin: "4px 0" }}>
-        <TypeChip type={section.node.type} compact />{" "}
+      <div style={{ fontSize, fontWeight: 700, margin: "4px 0", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 7 }}>
+        <TypeChip type={section.node.type} />
         <Link to={buildNodeLink(activeTab, section.node.id)}>{section.node.title}</Link>
+        <StatusBadge status={section.node.status} />
       </div>
       {section.node.body ? <div className="body-view">{section.node.body}</div> : null}
       {Object.entries(section.attached).map(([edgeType, nodes]) =>
         nodes.length > 0 ? (
-          <div key={edgeType} className="faint" style={{ margin: "4px 0" }}>
-            {edgeType}: {nodes.map((n) => n.title).join(", ")}
+          <div key={edgeType} className="faint" style={{ margin: "4px 0", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
+            {edgeType}:
+            {nodes.map((n, i) => (
+              <span key={n.id} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                {n.title}
+                {i < nodes.length - 1 ? "," : ""}
+                <StatusBadge status={n.status} />
+              </span>
+            ))}
           </div>
         ) : null,
       )}
