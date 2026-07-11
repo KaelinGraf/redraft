@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useOutline, useTimeline } from "../../api/queries";
 import { buildNodeLink } from "../../lib/nav";
-import { nodeTypeColor, statusColor } from "../../lib/palette";
+import { statusColor } from "../../lib/palette";
 import { EmptyState } from "../EmptyState";
 import { TypeChip } from "../TypeChip";
-import { AXIS_HEIGHT, BAR_HEIGHT, DIAMOND_R, ROW_HEIGHT, buildLayout, type PositionedItem } from "./layout";
+import { AXIS_HEIGHT, BAR_HEIGHT, DIAMOND_R, LANE_GAP, LANE_HEADER_HEIGHT, ROW_HEIGHT, buildLayout, type PositionedItem } from "./layout";
 import type { TimelineItem } from "../../api/types";
 
 /** CENTER, Timeline tab: /timeline -- Gantt-style milestone planning over the Planning dates
@@ -60,10 +60,16 @@ export default function TimelineView() {
   const unscheduled = useMemo(() => items.filter((i) => !i.start && !i.due), [items]);
   const layout = useMemo(() => buildLayout(scheduled, titleFor, plotAreaWidth), [scheduled, titleById, plotAreaWidth]);
 
+  // Shared between the gutter's row labels and the plot's row-highlight bands, so hovering
+  // either side highlights both (optional nicety from the build brief -- cheap given both
+  // already render one element per item in the same `layout.lanes[].items` order).
+  const [hoverId, setHoverId] = useState<string | null>(null);
+
   if (isPending) return <div className="spinner-line">Loading timeline…</div>;
   if (isError) return <EmptyState>Failed to load the timeline.</EmptyState>;
 
   const goToNode = (id: string) => navigate(buildNodeLink("outline", id));
+  const allItems = layout.lanes.flatMap((lane) => lane.items);
 
   return (
     <div className="timeline-view">
@@ -74,8 +80,28 @@ export default function TimelineView() {
           <div className="timeline-lanes-col">
             <div style={{ height: AXIS_HEIGHT }} />
             {layout.lanes.map((lane) => (
-              <div key={lane.key || "ungrouped"} className="timeline-lane-label" style={{ height: lane.height }} title={lane.title}>
-                {lane.title}
+              <div key={lane.key || "ungrouped"} className="timeline-lane-group">
+                <div className="timeline-lane-header" style={{ height: LANE_HEADER_HEIGHT }} title={lane.title}>
+                  <span className="timeline-lane-header__text">{lane.title}</span>
+                </div>
+                {lane.items.map((p) => (
+                  <Link
+                    key={p.item.id}
+                    to={buildNodeLink("outline", p.item.id)}
+                    className={`timeline-row-label${p.item.id === hoverId ? " timeline-row-label--hover" : ""}`}
+                    style={{ height: ROW_HEIGHT }}
+                    title={p.item.title}
+                    onMouseEnter={() => setHoverId(p.item.id)}
+                    onMouseLeave={() => setHoverId((h) => (h === p.item.id ? null : h))}
+                  >
+                    <TypeChip type={p.item.type} compact />
+                    <span className="timeline-row-label__text">{p.item.title}</span>
+                  </Link>
+                ))}
+                {/* Mirrors layout.ts's `y += height + LANE_GAP` between lanes -- without this
+                    spacer the gutter's flex stack would drift out of alignment with the plot
+                    from the second lane onward (only visible with >1 lane, e.g. the p4p graph). */}
+                <div style={{ height: LANE_GAP }} />
               </div>
             ))}
           </div>
@@ -94,12 +120,24 @@ export default function TimelineView() {
                   </text>
                 </g>
               ))}
+              {allItems.map((p) => (
+                <rect
+                  key={p.item.id}
+                  x={0}
+                  y={p.y - ROW_HEIGHT / 2}
+                  width={layout.chartWidth}
+                  height={ROW_HEIGHT}
+                  className={`timeline-row-band${p.item.id === hoverId ? " timeline-row-band--hover" : ""}`}
+                  onMouseEnter={() => setHoverId(p.item.id)}
+                  onMouseLeave={() => setHoverId((h) => (h === p.item.id ? null : h))}
+                />
+              ))}
               {layout.arrows.map((a) => (
                 <path key={a.key} d={a.d} className="timeline-arrow" markerEnd="url(#tl-arrowhead)" />
               ))}
-              {layout.lanes.map((lane) =>
-                lane.items.map((p) => <TimelineMark key={p.item.id} p={p} onClick={() => goToNode(p.item.id)} />),
-              )}
+              {allItems.map((p) => (
+                <TimelineMark key={p.item.id} p={p} onClick={() => goToNode(p.item.id)} />
+              ))}
             </svg>
           </div>
         </div>
@@ -121,12 +159,6 @@ function TimelineMark({ p, onClick }: { p: PositionedItem; onClick: () => void }
       ) : (
         <polygon points={diamondPoints(p.x1, p.y)} fill={color} />
       )}
-      <foreignObject x={p.x2 + 6} y={p.y - ROW_HEIGHT / 2} width={p.labelWidth} height={ROW_HEIGHT}>
-        <div className="timeline-mark__label">
-          <span className="type-chip__dot" style={{ background: nodeTypeColor(p.item.type) }} />
-          <span className="timeline-mark__text">{p.item.title}</span>
-        </div>
-      </foreignObject>
     </g>
   );
 }

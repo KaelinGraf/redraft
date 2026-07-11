@@ -11,7 +11,8 @@ export const BAR_HEIGHT = 14;
 export const DIAMOND_R = 6;
 export const LANE_GAP = 14;
 export const AXIS_HEIGHT = 30;
-export const LABEL_BUFFER = 190; // trailing px reserved past the last tick for item labels
+export const LANE_HEADER_HEIGHT = 28; // per-lane header row height -- shared by the plot's Y-offset math AND the gutter's header div, so the two stay pixel-aligned
+const PLOT_END_MARGIN = 20; // small trailing px past the last tick -- headroom for a diamond's radius / arrowhead marker at the plot's right edge (item titles no longer live in the plot, so no big trailing label buffer is needed here any more)
 const MAX_PLOT_WIDTH = 20000; // safety ceiling, well under common browser SVG rasterization limits
 const MIN_PX_PER_DAY = 5; // a multi-year domain scrolls horizontally at this density rather than compressing to an unreadable sliver
 const MAX_PX_PER_DAY = 220; // a near-zero-day domain still fills its container without stretching a single bar absurdly wide
@@ -34,8 +35,9 @@ export interface PositionedItem {
   kind: "bar" | "diamond";
   x1: number;
   x2: number; // === x1 for a diamond
-  y: number; // absolute mid-row y within the whole chart, px
-  labelWidth: number; // px available for the trailing label before the next item in this sub-row
+  y: number; // absolute mid-row y within the whole chart, px -- ALSO drives the gutter row label's
+  // position (index.tsx renders one gutter div per item, same top-to-bottom order as this array,
+  // each ROW_HEIGHT tall -- no separate offset field needed since the stacking order matches).
 }
 
 export interface Lane {
@@ -114,21 +116,24 @@ export function buildLayout(scheduled: TimelineItem[], titleFor: (id: string) =>
   const totalDays = Math.max(1, Math.round((domainEnd - domainStart) / DAY_MS));
 
   // px/day is derived from the ACTUAL container width, not a fixed tier -- a short domain (a
-  // 6-day sprint) should fill the tab, not render as a ~500px strip in a 1650px container. The
-  // available plot width is containerWidth minus LABEL_BUFFER (the trailing strip reserved past
-  // the last tick for item labels, same role it always had -- scaleX maps the domain into
-  // plotWidth only, not the full chartWidth). Clamped both ways: MIN_PX_PER_DAY keeps a
-  // multi-year domain from compressing to nothing (it scrolls horizontally in .timeline-scroll
-  // instead, which owns overflow-x -- the OUTER page never scrolls, per the build brief);
-  // MAX_PX_PER_DAY stops a degenerate near-zero-day domain from stretching a bar to hundreds of
-  // px on an ultrawide monitor. Capped again at MAX_PLOT_WIDTH -- the same fat-fingered-year
-  // typo that motivates MAX_TICKS below would otherwise ask for a millions-of-pixels-wide
-  // <svg>, past what browsers reliably rasterize (common engine ceilings sit in the ~32,767px
-  // neighborhood).
-  const availablePlotWidth = Math.max(320, containerWidth - LABEL_BUFFER);
+  // 6-day sprint) should fill the tab, not render as a ~500px strip in a 1650px container.
+  // `containerWidth` is .timeline-scroll's own measured width (index.tsx, ResizeObserver) --
+  // that element is the flex:1 sibling of the gutter column (.timeline-lanes-col, CSS-sized), so
+  // the browser's flex layout has ALREADY subtracted the gutter's real width by the time this
+  // measurement is taken; no separate gutter-width subtraction is needed here. Item titles now
+  // live in the gutter, not the plot, so the full measured width is available to the plot (only
+  // PLOT_END_MARGIN is reserved, for mark overflow at the right edge). Clamped both ways:
+  // MIN_PX_PER_DAY keeps a multi-year domain from compressing to nothing (it scrolls
+  // horizontally in .timeline-scroll instead, which owns overflow-x -- the OUTER page never
+  // scrolls, per the build brief); MAX_PX_PER_DAY stops a degenerate near-zero-day domain from
+  // stretching a bar to hundreds of px on an ultrawide monitor. Capped again at MAX_PLOT_WIDTH --
+  // the same fat-fingered-year typo that motivates MAX_TICKS below would otherwise ask for a
+  // millions-of-pixels-wide <svg>, past what browsers reliably rasterize (common engine ceilings
+  // sit in the ~32,767px neighborhood).
+  const availablePlotWidth = Math.max(320, containerWidth);
   const pxPerDay = Math.min(MAX_PX_PER_DAY, Math.max(MIN_PX_PER_DAY, availablePlotWidth / totalDays));
   const plotWidth = Math.min(MAX_PLOT_WIDTH, Math.max(availablePlotWidth, Math.round(totalDays * pxPerDay)));
-  const chartWidth = plotWidth + LABEL_BUFFER;
+  const chartWidth = plotWidth + PLOT_END_MARGIN;
   const scaleX = (ms: number) => ((ms - domainStart) / (domainEnd - domainStart)) * plotWidth;
   const granularity = totalDays > 120 ? "month" : totalDays > 21 ? "week" : "day";
   const ticks = buildTicks(domainStart, domainEnd, scaleX, granularity);
@@ -149,25 +154,29 @@ export function buildLayout(scheduled: TimelineItem[], titleFor: (id: string) =>
   const namedKeys = [...byKey.keys()].filter((k) => k !== "").sort((a, b) => titleFor(a).localeCompare(titleFor(b)));
   const orderedKeys = byKey.has("") ? [...namedKeys, ""] : namedKeys;
 
+  // Each lane reserves LANE_HEADER_HEIGHT of blank plot space above its first item row -- the
+  // gutter renders a matching header div of the same height (index.tsx), so the item rows below
+  // it land pixel-aligned with their bars without index.tsx needing any offset math of its own:
+  // both sides just stack AXIS_HEIGHT, then per lane (LANE_HEADER_HEIGHT + items*ROW_HEIGHT),
+  // then LANE_GAP, in the same order.
   const lanes: Lane[] = [];
   const positionedById = new Map<string, PositionedItem>();
   let y = AXIS_HEIGHT;
-  const maxLabelWidth = LABEL_BUFFER - 10; // matches the foreignObject width this replaces (was a flat constant)
   for (const key of orderedKeys) {
     const laneItems = byKey.get(key)!.slice().sort((a, b) => a.startMs - b.startMs);
+    const rowsStart = y + LANE_HEADER_HEIGHT;
     const positioned: PositionedItem[] = laneItems.map((p, row) => {
       const posItem: PositionedItem = {
         item: p.item,
         kind: p.kind,
         x1: scaleX(p.startMs),
         x2: scaleX(p.endMs),
-        y: y + row * ROW_HEIGHT + ROW_HEIGHT / 2,
-        labelWidth: maxLabelWidth,
+        y: rowsStart + row * ROW_HEIGHT + ROW_HEIGHT / 2,
       };
       positionedById.set(p.item.id, posItem);
       return posItem;
     });
-    const height = Math.max(1, laneItems.length) * ROW_HEIGHT;
+    const height = LANE_HEADER_HEIGHT + laneItems.length * ROW_HEIGHT;
     lanes.push({ key, title: key === "" ? "Ungrouped" : titleFor(key), y, height, items: positioned });
     y += height + LANE_GAP;
   }

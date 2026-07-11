@@ -811,11 +811,12 @@ table.decision-table th {
 }
 
 .timeline-lanes-col {
-  flex: 0 0 150px;
+  flex: 0 0 280px;
+  max-width: 280px;
   border-right: 1px solid var(--border);
 }
 
-.timeline-lane-label {
+.timeline-lane-header {
   display: flex;
   align-items: center;
   padding: 0 10px;
@@ -823,9 +824,50 @@ table.decision-table th {
   font-weight: 600;
   color: var(--text-dim);
   border-bottom: 1px dashed var(--border);
+}
+
+/* text-overflow: ellipsis on the flex container itself (the original, pre-gutter-rework rule)
+ * silently hard-clips instead of showing "…" -- a flex container's direct text run isn't a
+ * normal block/inline-flow box, so the ellipsis algorithm doesn't reliably engage on it (visible
+ * live: a 150px column rarely truncated, but the widened 280px gutter still overflows on long
+ * lane titles, e.g. "Synthetic data generation and sim-to-real transfer"). A nested span, same
+ * fix already used for .timeline-row-label__text below, is the actual working pattern. */
+.timeline-lane-header__text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+.timeline-row-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 20px;
+  font-size: 12px;
+  color: var(--text);
+  text-decoration: none;
+  overflow: hidden;
+}
+
+.timeline-row-label:hover,
+.timeline-row-label--hover {
+  background: var(--surface-2);
+}
+
+.timeline-row-label__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.timeline-row-band {
+  fill: transparent;
+}
+
+.timeline-row-band--hover {
+  fill: var(--surface-2);
 }
 
 .timeline-scroll {
@@ -855,22 +897,6 @@ table.decision-table th {
 
 .timeline-mark {
   cursor: pointer;
-}
-
-.timeline-mark__label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 100%;
-  font-size: 11.5px;
-  color: var(--text);
-}
-
-.timeline-mark__text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
 }
 
 .timeline-tray__badge {
