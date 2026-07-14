@@ -74,7 +74,10 @@ def ui_app(graph_dir: Path):
 
 @pytest.fixture
 async def ui_client(ui_app):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=ui_app), base_url="http://test") as client:
+    # base_url's host becomes this client's default Host header (httpx derives it from the
+    # authority when none is set explicitly) -- loopback so _same_origin_guard's Host check
+    # (redraft.ui.app) doesn't 403 every request that doesn't override it by hand.
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=ui_app), base_url="http://127.0.0.1") as client:
         yield client
 
 

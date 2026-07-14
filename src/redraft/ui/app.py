@@ -42,10 +42,30 @@ T = TypeVar("T")
 # create_app() time (uvicorn's port==0 auto-assign, or a caller that just doesn't pass one,
 # would otherwise have no port to check against).
 _LOOPBACK_ORIGIN_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", re.IGNORECASE)
+# Same loopback host set as _LOOPBACK_ORIGIN_RE, just without the scheme -- Host headers never
+# carry one (design note on _same_origin_guard below explains why this exists alongside Origin).
+_LOOPBACK_HOST_RE = re.compile(r"^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", re.IGNORECASE)
 
 
 def _is_allowed_origin(origin: str) -> bool:
     return _LOOPBACK_ORIGIN_RE.match(origin) is not None
+
+
+def _is_allowed_host(host: str) -> bool:
+    return _LOOPBACK_HOST_RE.match(host) is not None
+
+
+def _origin_matches_host(origin: str, host: str | None) -> bool:
+    """Self-origin test for the non-strict (non-loopback bind) mode: does `origin`'s
+    host[:port], after stripping its http/https scheme, equal the request's own Host header
+    value case-insensitively? A browser's same-origin SPA fetch always satisfies this (its
+    Origin is literally scheme + the URL authority it loaded the page from, which is what it
+    sends as Host); a cross-site page's script never can, since its Origin names ITS OWN
+    authority. Non-http(s) origins ("null", extension schemes) never match."""
+    if host is None:
+        return False
+    m = re.match(r"^https?://(.+)$", origin, re.IGNORECASE)
+    return m is not None and m.group(1).lower() == host.lower()
 
 
 @dataclass
@@ -119,8 +139,18 @@ async def _poll_reindex(state: UIAppState) -> None:
 
 
 def create_app(
-    graph_dir: Path, retrieval_config: RetrievalConfig, *, reindex_poll_interval: float = 5.0
+    graph_dir: Path,
+    retrieval_config: RetrievalConfig,
+    *,
+    reindex_poll_interval: float = 5.0,
+    strict_loopback: bool = True,
 ) -> FastAPI:
+    """strict_loopback=True (the default, and the secure configuration) pins
+    _same_origin_guard below to loopback-only Host and Origin values — correct for the default
+    127.0.0.1 bind. main() passes False when the operator explicitly binds a non-loopback
+    --host (LAN exposure), where loopback-only checks would 403 every remote request,
+    including the app's own SPA fetches; see the middleware docstring for what is (and isn't)
+    still protected in that mode."""
     worker = StoreWorker(graph_dir, retrieval_config)
     # Block until GraphStore's own construction (including its constructor's reindex() call)
     # finishes -- closes the startup race between Lane-B's direct index_read_conn reads
@@ -182,9 +212,39 @@ def create_app(
         Applies to every route, GET included: GET is read-only so allowing it is safe, and
         applying uniformly (rather than only to mutating verbs) also closes the reindex-CSRF
         finding for free without a second, route-specific mechanism.
+
+        DNS-rebinding residual (red-team finding), closed here too: Origin-only checking still
+        lets through any request that simply carries NO Origin header at all -- true of every
+        non-browser HTTP client, not just curl. A DNS-rebinding attacker who gets a name like
+        evil.example to resolve to 127.0.0.1 (after the victim's browser already loaded a page
+        from it) can issue exactly such a request, whose Host header names the attacker's own
+        domain rather than this server's loopback address, straight at this process. Checked in
+        the SAME middleware (one CSRF gate, not two) rather than a second one: any request whose
+        Host header is present and not loopback is rejected before the Origin check even runs.
+
+        strict_loopback=False (operator explicitly bound a non-loopback --host, i.e. chose LAN
+        exposure) relaxes BOTH checks -- loopback-only versions would 403 literally every
+        remote request, browser or not, making the documented `redraft ui --host 0.0.0.0` flag
+        useless. In that mode: the Host check is skipped entirely (we cannot enumerate which
+        IPs/names legitimately reach this machine), and the Origin check also accepts a
+        self-origin -- Origin whose host[:port], scheme stripped, equals the request's own Host
+        header (_origin_matches_host) -- alongside the loopback set, so the SPA's own fetches
+        pass while a genuinely foreign Origin (classic cross-site CSRF) still 403s. TRADEOFF,
+        stated plainly: Origin==Host self-origin matching is defeatable by DNS rebinding (the
+        rebound page's Origin carries the attacker's domain, but so does the victim's Host
+        header -- they match). Non-loopback binding is an explicit operator opt-in to that
+        residual risk; the loopback default remains the secure configuration.
         """
         origin = request.headers.get("origin")
-        if origin is not None and not _is_allowed_origin(origin):
+        if strict_loopback:
+            host = request.headers.get("host")
+            if host is not None and not _is_allowed_host(host):
+                return PlainTextResponse("cross-origin request rejected", status_code=403)
+            if origin is not None and not _is_allowed_origin(origin):
+                return PlainTextResponse("cross-origin request rejected", status_code=403)
+        elif origin is not None and not (
+            _is_allowed_origin(origin) or _origin_matches_host(origin, request.headers.get("host"))
+        ):
             return PlainTextResponse("cross-origin request rejected", status_code=403)
         return await call_next(request)
 
@@ -239,7 +299,16 @@ def main(
     import uvicorn
 
     resolved = resolve_graph_dir(graph_dir)
-    application = create_app(resolved, RetrievalConfig(), reindex_poll_interval=reindex_poll_interval)
+    # A non-loopback bind (`--host 0.0.0.0`, a LAN IP, a hostname) is an explicit operator
+    # opt-in to network exposure -- create_app's loopback-hardcoded guards would otherwise 403
+    # every single remote request (see _same_origin_guard). Compared directly against the bare
+    # bind-address forms argparse hands us -- schemeless AND bracketless (a bind address is
+    # "::1", never "[::1]"), so _is_allowed_host (which expects the bracketed Host-header form)
+    # deliberately isn't reused here.
+    strict = host.lower() in ("127.0.0.1", "localhost", "::1")
+    application = create_app(
+        resolved, RetrievalConfig(), reindex_poll_interval=reindex_poll_interval, strict_loopback=strict
+    )
     uvicorn.run(application, host=host, port=port)
 
 

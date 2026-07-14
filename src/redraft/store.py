@@ -12,7 +12,7 @@ import hashlib
 import json
 import os
 import unicodedata
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +32,31 @@ from redraft.schema import EdgeType, Edge, LIST_EDGE_TYPES, Node, NodeType, vali
 
 def _utc_now_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# Unbounded title/body accepted an arbitrary in-memory string all the way from a request body
+# to a YAML dump + FTS index write, with no cap anywhere on either the UI REST path or the MCP
+# tool path (a 40MB body measured ~554MB RSS and ~11s per write). Enforced HERE, at the
+# GraphStore layer both paths funnel through -- not only in ui/models.py's Pydantic request
+# models, which the MCP create_node/update_node tools never pass through at all.
+MAX_TITLE_CHARS = 300  # organizing-protocol.md §2 already asks authors to keep titles "well
+# under 100 characters" (detail belongs in the body); 300 is generous headroom above that
+# guidance while still bounding a pathological input -- a title is a label, not prose.
+MAX_BODY_BYTES = 256 * 1024  # 256 KiB. A design-note body is prose (a few hundred KB is
+# already an implausibly long single node); large binary/opaque content already has a
+# dedicated, purpose-built path (the attachments upload route, streamed and capped at 50 MiB
+# in ui/mutations.py) -- raising this cap to match would just move the DoS surface, not close it.
+
+
+def _check_title_length(title: str) -> None:
+    if len(title) > MAX_TITLE_CHARS:
+        raise ValueError(f"title exceeds {MAX_TITLE_CHARS}-character limit (got {len(title)})")
+
+
+def _check_body_size(body: str) -> None:
+    size = len(body.encode("utf-8"))
+    if size > MAX_BODY_BYTES:
+        raise ValueError(f"body exceeds {MAX_BODY_BYTES}-byte limit (got {size} bytes)")
 
 
 def _semantic_form(node: Node) -> str:
@@ -177,6 +202,8 @@ class GraphStore:
         node_type = NodeType(type)
         resolved_status = validate_status(node_type, status)
         title = unicodedata.normalize("NFC", title)
+        _check_title_length(title)
+        _check_body_size(body)
 
         with self._locked_transaction():
             node_id = sanitize_title_to_id(title)
@@ -243,6 +270,12 @@ class GraphStore:
             if body is not None:
                 stripped = body.strip()
                 new_body = stripped if mode == "replace" or not current.body else f"{current.body}\n\n{stripped}"
+                # Checked against the FINAL new_body, not just the incoming chunk -- append mode
+                # can push a body over the cap through accumulation even when no single call's
+                # `body` argument is oversized on its own. A pre-existing oversized body (e.g.
+                # from before this cap existed) is left alone by any update that doesn't touch
+                # body at all (the `body is None` case, above this block, never reaches here).
+                _check_body_size(new_body)
 
             new_status = validate_status(current.type, status) if status is not None else current.status
             new_properties = dict(current.properties)
@@ -522,15 +555,28 @@ class GraphStore:
             )
 
     def rename_node(self, id: str, new_title: str) -> Node:
+        """A4 (Batch-B fix): the OLD ordering rewrote every OTHER referrer FIRST and only wrote
+        the renamed node's own file at the very end -- so the redirect target (new_id's file)
+        didn't exist until the last step. A crash mid-referrer-loop left an already-rewritten
+        referrer pointing at an id that had never come into existence: permanently dangling,
+        unlike merge_nodes (crash-safe because its redirect target, keep_id, pre-exists
+        throughout). Fixed by making new_id's file exist FIRST, before any referrer is
+        rewritten: (a) write it, (b) rewrite inbound referrers old -> new, (c) retire the old
+        path last. A crash mid-(b) now leaves every referrer pointing at an id that EXISTS
+        (either still-old, not yet reached, or already-new) -- zero dangling. A crash after
+        (a)/before (c) leaves a transient duplicate (both old and new id resolve); a bare
+        reindex heals the index, and retrying this exact call finishes the job. That retry
+        needs the collision check below to recognize its own abandoned duplicate rather than
+        reject it as "new_id already exists" -- content can coincidentally match an unrelated
+        node (two freshly-created empty nodes are indistinguishable that way), so provenance is
+        proven with a small marker file dropped alongside the transient duplicate instead (see
+        `marker_path` below), not by comparing bytes.
+        """
         with self._locked_transaction():
             self._require_exists(id)
             new_title = unicodedata.normalize("NFC", new_title)
+            _check_title_length(new_title)
             new_id = sanitize_title_to_id(new_title)
-
-            if new_id != id:
-                existing = self._find_existing_id(new_id)
-                if existing is not None and collision_key(existing) != collision_key(id):
-                    raise CollisionError(existing, self._node_path(existing))
 
             rows = self.con.execute("SELECT src, type FROM edges WHERE dst = ?", (id,)).fetchall()
             referrers: dict[str, list[EdgeType]] = {}
@@ -538,44 +584,58 @@ class GraphStore:
                 referrers.setdefault(src, []).append(EdgeType(edge_type))
 
             touched = self._rewrite_inbound_links(id, new_id, referrers) if new_id != id else []
-
             self_node = next((n for n in touched if n.id == id), None) or load_node_file(self._node_path(id))
             renamed = self_node.model_copy(update={"id": new_id, "title": new_title, "updated": _utc_now_str()})
             other_referrers = [n for n in touched if n.id != id]
 
-            # A4: persist every OTHER referrer's rewrite first, while `id`'s own file still
-            # exists on disk — a crash here is safely retriable: a retry's inbound-edges query
-            # naturally excludes any referrer already repointed (its file/index already show
-            # new_id), and `id` itself is still findable to resume from. Only once every
-            # referrer is durably repointed do we retire the node's own file, last.
+            new_path = self._node_path(new_id)
+            # Not a *.md file, so invisible to _find_existing_id's/reindex's globs -- exists
+            # solely to let a retry's collision check below prove "the file already at new_id is
+            # MY OWN abandoned duplicate from renaming id", the one fact plain byte-comparison
+            # can't establish. Written before new_path's content (so it's already durable at the
+            # instant new_path becomes visible) and retired together with the old path in (c).
+            marker_path = new_path.with_name(new_path.name + ".rename-from")
+
+            if new_id != id:
+                existing = self._find_existing_id(new_id)
+                if existing is not None and collision_key(existing) != collision_key(id):
+                    resumable = existing == new_id and marker_path.exists() and marker_path.read_text() == id
+                    if not resumable:
+                        raise CollisionError(existing, self._node_path(existing))
+
+            # (a) new_id's file first -- referrers below can now always resolve it, crash or not.
+            text = dump_node_file(renamed)
+            if new_id != id:
+                _atomic_write(marker_path, id)
+            _atomic_write(new_path, text)
+            index._upsert_node_index(self.con, renamed, content_hash=_content_hash(text))
+
+            # (b) every OTHER referrer, old -> new. A retry's referrers query above naturally
+            # excludes any already repointed (its file/index already show new_id).
             for referrer in other_referrers:
                 r_text = dump_node_file(referrer)
                 _atomic_write(self._node_path(referrer.id), r_text)
                 index._upsert_node_index(self.con, referrer, content_hash=_content_hash(r_text))
 
-            text = dump_node_file(renamed)
-            # Write the new content at the OLD path first, then rename via os.replace — a single
-            # rename syscall handles a pure-case-variant new_id correctly on case-insensitive-
-            # but-case-preserving filesystems (APFS/NTFS), where a separate "write new path,
-            # remove old path" can otherwise delete the just-written file (design §6.4 step 6
-            # names os.replace as an equally-viable alternative; chosen here specifically to
-            # avoid that cross-filesystem footgun for case-only renames).
-            _atomic_write(self._node_path(id), text)
             if new_id != id:
-                os.replace(self._node_path(id), self._node_path(new_id))
+                # (c) retire the old path last, only once every referrer durably points at
+                # new_id. samefile guard: a pure case/Unicode-normalization-only rename on a
+                # case-insensitive-but-preserving filesystem (macOS APFS, Windows NTFS) makes
+                # old_path and new_path alias the SAME directory entry -- the write above already
+                # landed there, so old_path no longer names a second, removable file.
+                old_path = self._node_path(id)
+                if old_path.exists() and not old_path.samefile(new_path):
+                    os.remove(old_path)
+                with suppress(FileNotFoundError):
+                    os.remove(marker_path)
                 index._remove_node_index(self.con, id)
-            index._upsert_node_index(self.con, renamed, content_hash=_content_hash(text))
+
             if self._retrieval_config is not None:
-                # Both embed_upsert/embed_delete commit internally (S3a's own contract, not
-                # something this method controls) -- unlike the plain index._* calls above,
-                # which stay uncommitted until self.con.commit() below, an embed_* call here
-                # forces an early commit of EVERYTHING pending so far. Placed only after BOTH
-                # index._remove_node_index(id) and index._upsert_node_index(renamed) above
-                # (never between them) so that if one fires, it commits old-removed and
-                # new-created atomically together -- never a commit point where neither the
-                # old nor the new id resolves (which would break A4's crash-retriability: a
-                # retry's _require_exists(id)/load_node_file(id) both need `id` to still
-                # either fully exist or be already-fully-renamed, never caught in between).
+                # embed_upsert/embed_delete commit internally (S3a's own contract) -- placed
+                # only after BOTH index._remove_node_index(id) and index._upsert_node_index
+                # (renamed) above (never between them) so any embed-triggered early commit
+                # captures old-removed and new-created atomically together, never a commit point
+                # where neither id resolves.
                 if new_id != id:
                     embed_delete(self.con, id)  # old id's vector row is now orphaned
                 # Always re-checked, even when new_id == id: title can change (e.g. a pure

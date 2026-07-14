@@ -48,7 +48,9 @@ async def test_background_poll_picks_up_external_write_without_an_explicit_reind
 
     app = create_app(graph_dir, RetrievalConfig(), reindex_poll_interval=0.1)
     try:
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        # base_url's host is this client's default Host header -- loopback, so
+        # _same_origin_guard's Host check (redraft.ui.app) doesn't 403 it.
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as client:
             gen_before = (await client.get("/api/status")).json()["generation"]
 
             _write_external_node(graph_dir, "Polled Node")

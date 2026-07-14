@@ -50,6 +50,35 @@ async def test_create_node_illegal_status_value_raises_invalid_argument(mcp_serv
             await client.call_tool("create_node", {"type": "decision", "title": "X", "status": "not_a_real_status"})
 
 
+async def test_create_node_oversized_body_raises_invalid_argument(mcp_server):
+    # Batch-B hardening: the cap lives in GraphStore (protects the UI REST path too), but the
+    # MCP surface must reject cleanly rather than leak a masked, unmapped ValueError.
+    from redraft.store import MAX_BODY_BYTES
+
+    async with Client(mcp_server) as client:
+        with pytest.raises(ToolError, match="invalid_argument"):
+            await client.call_tool(
+                "create_node", {"type": "concept", "title": "Oversized", "body": "x" * (MAX_BODY_BYTES + 1)}
+            )
+
+
+async def test_create_node_oversized_title_raises_invalid_argument(mcp_server):
+    from redraft.store import MAX_TITLE_CHARS
+
+    async with Client(mcp_server) as client:
+        with pytest.raises(ToolError, match="invalid_argument"):
+            await client.call_tool("create_node", {"type": "concept", "title": "x" * (MAX_TITLE_CHARS + 1)})
+
+
+async def test_update_node_oversized_body_raises_invalid_argument(mcp_server):
+    from redraft.store import MAX_BODY_BYTES
+
+    async with Client(mcp_server) as client:
+        node = await _create(client, "concept", "Update Target")
+        with pytest.raises(ToolError, match="invalid_argument"):
+            await client.call_tool("update_node", {"id": node.id, "body": "x" * (MAX_BODY_BYTES + 1)})
+
+
 async def test_create_node_default_status_applied(mcp_server):
     async with Client(mcp_server) as client:
         node = await _create(client, "decision", "Fork GeoTransformer")

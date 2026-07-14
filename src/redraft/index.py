@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import unicodedata
 from dataclasses import dataclass, field
@@ -166,12 +167,25 @@ def dangling_edges(con: sqlite3.Connection) -> list[tuple[str, str, str, str]]:
 
 def reindex(con: sqlite3.Connection, nodes_dir: Path) -> ReindexStats:
     """Incremental reindex: hash-compare graph/nodes/*.md against the index, upsert changed
-    nodes, delete removed ones. Read-only against the canonical store (design §5.2, §5.3).
+    nodes, delete removed ones. Read-only against the canonical store CONTENT (design §5.2,
+    §5.3) -- with one deliberate, narrow exception: a non-NFC (e.g. NFD, as macOS Finder/native
+    editors commonly write) on-disk FILENAME is renamed in place to its NFC form below, before
+    being indexed. Every mutator (GraphStore._node_path) derives its path from the NFC id, so
+    an NFD-named file would otherwise be visible here and via get_node/search forever, yet
+    permanently unreachable for update/delete/rename/merge/create_edge(as src) -- raising
+    FileNotFoundError every time. The rename touches only the FILENAME, never the file's
+    content, so it doesn't violate the "derived, rebuildable from content" spirit this
+    docstring otherwise promises.
     """
     on_disk: dict[str, tuple[Path, str]] = {}
     for path in sorted(nodes_dir.glob("*.md")):
+        node_id = unicodedata.normalize("NFC", path.stem)
+        if node_id != path.stem:
+            target = path.with_name(f"{node_id}{path.suffix}")
+            if not target.exists():  # don't clobber a genuine pre-existing NFC-named collision
+                os.replace(path, target)
+                path = target
         raw = path.read_bytes()
-        node_id = unicodedata.normalize("NFC", path.stem)  # defensive: foreign tool, non-NFC name
         on_disk[node_id] = (path, hashlib.sha256(raw).hexdigest())
 
     indexed_hash = dict(con.execute("SELECT id, content_hash FROM nodes"))

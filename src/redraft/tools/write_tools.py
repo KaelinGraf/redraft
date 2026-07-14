@@ -98,6 +98,7 @@ from redraft.models import (
     to_edge_out,
     to_node_out,
 )
+from redraft.store import MAX_BODY_BYTES, MAX_TITLE_CHARS
 from redraft.tools.read_tools import index_read_conn, query_edges
 
 if TYPE_CHECKING:
@@ -107,9 +108,30 @@ if TYPE_CHECKING:
 def _validate_title(title: str) -> None:
     """Stateless pre-check mirroring design-storage.md section 2's own
     sanitize_title_to_id empty-title rule -- see module docstring's BUG
-    FOUND note for why this exists."""
+    FOUND note for why this exists. Also mirrors GraphStore's own MAX_TITLE_CHARS cap (a bare
+    ValueError from GraphStore isn't one of pin R7's 6 mapped types, so unguarded it would be
+    masked by FastMCP(mask_error_details=True) into an opaque error for a plain oversized-title
+    mistake -- same failure class as the empty-title case this function already guards)."""
     if not unicodedata.normalize("NFC", title).strip():
         raise InvalidArgumentError("title must contain at least one non-whitespace character")
+    if len(title) > MAX_TITLE_CHARS:
+        raise InvalidArgumentError(f"title exceeds {MAX_TITLE_CHARS}-character limit", length=len(title))
+
+
+def _validate_body_size(body: str) -> None:
+    """Same rationale as _validate_title's MAX_TITLE_CHARS check, for GraphStore's
+    MAX_BODY_BYTES cap (Batch-B hardening: a 40MB body measured ~554MB RSS / ~11s per write,
+    with no cap anywhere on either the UI REST path or this MCP tool path). RESIDUAL GAP: this
+    only catches an oversized *incoming* body chunk -- update_node's append mode can still push
+    the FINAL body over the cap through accumulation without any single call's own `body`
+    argument being oversized; GraphStore.update_node itself always enforces the true final
+    size (never silently truncates), but a rejection reaching only that layer surfaces here as
+    an unmapped, FastMCP-masked ValueError rather than this function's clearer message -- same
+    accepted residual shape as sanitize_title_to_id's illegal-character-only case, documented
+    above in this module's own docstring."""
+    size = len(body.encode("utf-8"))
+    if size > MAX_BODY_BYTES:
+        raise InvalidArgumentError(f"body exceeds {MAX_BODY_BYTES}-byte limit", size=size)
 
 
 def _validate_status(type_: str, status: str | None) -> None:
@@ -141,6 +163,7 @@ def register_write_tools(mcp: FastMCP, state: "ServerState") -> None:
         """Create a new node. Does not attach it anywhere -- call create_edge next."""
         _validate_title(title)
         _validate_status(type, status)
+        _validate_body_size(body)
         with translate_store_errors():
             node = state.store.create_node(type=type, title=title, body=body, status=status, properties=properties)
         return to_node_out(node)
@@ -160,6 +183,8 @@ def register_write_tools(mcp: FastMCP, state: "ServerState") -> None:
         properties key, list it in `remove_properties` instead -- removal is applied after the
         merge, so it wins if the same key appears in both, and removing an absent key is a
         no-op."""
+        if body is not None:
+            _validate_body_size(body)
         with translate_store_errors():
             node = state.store.update_node(
                 id, body=body, mode=mode, status=status, properties=properties, remove_properties=remove_properties

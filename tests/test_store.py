@@ -57,6 +57,52 @@ def test_create_node_default_status_by_type(store):
     assert concept.status is None
 
 
+# -- size caps (Batch-B hardening: unbounded body/title) ---------------------------------------
+
+
+def test_create_node_rejects_oversized_body(store):
+    from redraft.store import MAX_BODY_BYTES
+
+    with pytest.raises(ValueError, match="body exceeds"):
+        store.create_node(type=NodeType.CONCEPT, title="Too Big", body="x" * (MAX_BODY_BYTES + 1))
+    assert store.con.execute("SELECT 1 FROM nodes WHERE id = ?", ("Too Big",)).fetchone() is None
+
+
+def test_create_node_normal_sized_body_still_works(store):
+    node = store.create_node(type=NodeType.CONCEPT, title="Normal Size", body="x" * 1000)
+    assert len(node.body) == 1000
+
+
+def test_create_node_rejects_oversized_title(store):
+    from redraft.store import MAX_TITLE_CHARS
+
+    with pytest.raises(ValueError, match="title exceeds"):
+        store.create_node(type=NodeType.CONCEPT, title="x" * (MAX_TITLE_CHARS + 1))
+
+
+def test_update_node_rejects_oversized_replace_body(store):
+    from redraft.store import MAX_BODY_BYTES
+
+    node = store.create_node(type=NodeType.CONCEPT, title="Update Too Big")
+    with pytest.raises(ValueError, match="body exceeds"):
+        store.update_node(node.id, body="x" * (MAX_BODY_BYTES + 1), mode="replace")
+
+
+def test_update_node_rejects_append_that_crosses_cap_via_accumulation(store):
+    from redraft.store import MAX_BODY_BYTES
+
+    node = store.create_node(type=NodeType.CONCEPT, title="Grows Via Append", body="x" * (MAX_BODY_BYTES - 10))
+    with pytest.raises(ValueError, match="body exceeds"):
+        store.update_node(node.id, body="y" * 100)  # neither chunk alone is oversized
+    assert store.get_node(node.id).body == "x" * (MAX_BODY_BYTES - 10)  # untouched, no partial write
+
+
+def test_update_node_normal_sized_body_still_works(store):
+    node = store.create_node(type=NodeType.CONCEPT, title="Update Normal Size")
+    updated = store.update_node(node.id, body="y" * 1000, mode="replace")
+    assert len(updated.body) == 1000
+
+
 # -- part_of cycles / single-parent -----------------------------------------------------------
 
 
@@ -400,6 +446,21 @@ def test_rename_node_rejects_new_title_collision(store):
     assert store.get_node("Bar").title == "Bar"
 
 
+def test_rename_node_rejects_collision_even_when_existing_content_coincidentally_matches(store):
+    # Guards the resumable-retry escape hatch added for the A4 fix: it must NOT be fooled by two
+    # independently-created nodes that happen to be byte-for-byte identical once created/updated
+    # are stripped (two freshly-made, still-default concept nodes, exactly this case) -- telling
+    # "my own abandoned duplicate" apart from "a genuinely different, unrelated collision" can't
+    # rely on content matching alone, which is why provenance is proven with a marker file instead.
+    store.create_node(type=NodeType.CONCEPT, title="Foo")
+    bar = store.create_node(type=NodeType.CONCEPT, title="Bar")
+    with pytest.raises(CollisionError):
+        store.rename_node(bar.id, "Foo")
+    assert (store.paths.nodes_dir / "Bar.md").exists()
+    assert store.get_node("Bar").title == "Bar"
+    assert store.get_node("Foo").title == "Foo"  # untouched, not silently absorbed
+
+
 def test_rename_node_does_not_bump_updated_on_referrer_files(store):
     target = store.create_node(type=NodeType.CONCEPT, title="Rename Target")
     referrer = store.create_node(type=NodeType.OBSERVATION, title="Stable Referrer")
@@ -494,6 +555,61 @@ def test_rename_node_is_retriable_after_crash_mid_referrer_rewrite(tmp_path, mon
     assert store2.get_node(ref_b.id).references == [renamed.id]
     stale = store2.con.execute("SELECT 1 FROM edges WHERE dst = ?", (target.id,)).fetchone()
     assert stale is None
+
+
+def test_rename_node_crash_mid_referrer_loop_leaves_zero_dangling_and_heals_on_retry(tmp_path, monkeypatch):
+    """Batch-B regression for the pre-fix dangling-referrer bug: the OLD ordering wrote every
+    OTHER referrer before the renamed node's own file, so a crash after K of N referrers landed
+    left those K pointing at an id that had never come into existence on disk -- permanently
+    dangling. The fixed ordering writes new_id's own file FIRST, so a crash mid-referrer-loop
+    must leave dangling_edges() == [] (every referrer, rewritten or not, still names an id that
+    exists) even though old and new titles briefly coexist as a transient duplicate -- and a
+    bare reindex + an identical retry of this exact call must heal that duplicate down to
+    exactly one node, reachable under exactly the new title.
+    """
+    store = GraphStore(tmp_path)
+    target = store.create_node(type=NodeType.CONCEPT, title="Alpha")
+    referrers = [
+        store.create_node(type=NodeType.OBSERVATION, title=f"R{i}", edges={EdgeType.RELATES_TO: [target.id]})
+        for i in range(1, 6)
+    ]
+
+    real_atomic_write = store_module._atomic_write
+    count = {"n": 0}
+    K = 3  # crash after the 3rd of 5 referrers has landed on disk
+
+    def flaky_atomic_write(path, text):
+        real_atomic_write(path, text)
+        if path.stem.startswith("R"):
+            count["n"] += 1
+            if count["n"] == K:
+                raise RuntimeError("simulated crash mid rename_node referrer loop")
+
+    monkeypatch.setattr(store_module, "_atomic_write", flaky_atomic_write)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        store.rename_node(target.id, "Alpha Renamed")
+    monkeypatch.undo()
+    # Simulate the crashed process vanishing (its uncommitted transaction with it) and a fresh
+    # process starting up, whose GraphStore.__init__ reindex() rebuilds the index from disk truth.
+    store.con.rollback()
+    store.con.close()
+    store2 = GraphStore(tmp_path)
+
+    assert index.dangling_edges(store2.con) == []
+    # Both titles legitimately coexist right now -- the expected transient duplicate, not a bug.
+    node_ids_after_crash = {row[0] for row in store2.con.execute("SELECT id FROM nodes").fetchall()}
+    assert {"Alpha", "Alpha Renamed"} <= node_ids_after_crash
+
+    renamed = store2.rename_node(target.id, "Alpha Renamed")  # identical retry: must not raise
+    assert renamed.id == "Alpha Renamed"
+
+    store3 = GraphStore(tmp_path)
+    assert index.dangling_edges(store3.con) == []
+    node_ids = {row[0] for row in store3.con.execute("SELECT id FROM nodes").fetchall()}
+    assert "Alpha Renamed" in node_ids
+    assert "Alpha" not in node_ids  # healed: reachable under exactly one title now
+    for r in referrers:
+        assert store3.get_node(r.id).relates_to == ["Alpha Renamed"]
 
 
 def test_rename_node_with_retrieval_survives_crash_mid_referrer_rewrite(tmp_path, monkeypatch):
@@ -784,6 +900,48 @@ def test_merge_nodes_failure_rolls_back_and_does_not_leak_into_next_write(store)
         "merge's in-flight repoint to keep must never have been committed, whether by its own "
         "commit or leaked into a later, unrelated one"
     )
+
+
+# -- NFC filename self-heal (reindex) -------------------------------------------------------------
+
+
+def test_nfd_filename_node_becomes_mutable_after_reindex_self_heal(tmp_path):
+    # A foreign tool (macOS Finder, a native editor) can hand-drop a node file whose FILENAME is
+    # NFD-decomposed even though load_node_file/reindex NFC-normalize the in-memory id -- every
+    # mutator derives its path from that NFC id via _node_path, so before the reindex self-heal
+    # (index.reindex renaming the file to its NFC form) this node was visible in search/get_node
+    # yet raised FileNotFoundError from update_node/delete_node/create_edge(as src) forever.
+    import unicodedata
+
+    nfc_title = "café"
+    nfd_title = unicodedata.normalize("NFD", nfc_title)
+    assert nfc_title != nfd_title
+    nodes_dir = tmp_path / "graph" / "nodes"
+    nodes_dir.mkdir(parents=True)
+    (nodes_dir / f"{nfd_title}.md").write_bytes(
+        (
+            "---\ntype: concept\ntitle: café\n"
+            "created: '2026-01-01T00:00:00Z'\nupdated: '2026-01-01T00:00:00Z'\n---\n\n"
+            "hand-dropped node, NFD filename\n"
+        ).encode("utf-8")
+    )
+
+    store = GraphStore(tmp_path)  # constructor's own reindex() must self-heal the filename
+    assert (nodes_dir / f"{nfc_title}.md").exists()
+    assert not (nodes_dir / f"{nfd_title}.md").exists()
+
+    indexed_id = store.con.execute("SELECT id FROM nodes").fetchone()[0]
+    assert indexed_id == nfc_title
+
+    other = store.create_node(type=NodeType.OBSERVATION, title="Refers To Cafe")
+
+    updated = store.update_node(indexed_id, body="now mutable", mode="replace")
+    assert updated.body == "now mutable"
+    edge = store.create_edge(indexed_id, other.id, EdgeType.RELATES_TO)
+    assert edge.src == indexed_id
+    store.delete_node(indexed_id)
+    with pytest.raises(NotFoundError):
+        store.get_node(indexed_id)
 
 
 # -- locking ------------------------------------------------------------------------------------
