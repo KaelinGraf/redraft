@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -725,6 +726,64 @@ def test_merge_nodes_rejects_cycle_from_part_of_adoption(store):
 
     assert (store.paths.nodes_dir / f"{drop.id}.md").exists()  # nothing touched — rejected pre-write
     assert store.get_node(keep.id).part_of is None
+
+
+def test_merge_nodes_failure_rolls_back_and_does_not_leak_into_next_write(store):
+    """CRITICAL fix: self.con is one persistent connection for the store's whole life, and
+    every mutator issues its index._upsert_node_index/_remove_node_index calls uncommitted,
+    only committing at the very end. Before _locked_transaction existed, a mid-method
+    exception (here: os.remove on drop's file raising, as if the file were already gone via
+    an external race — merge_nodes writes referrer/keep's rewritten files+index rows to
+    reflect the repoint to `keep` BEFORE this final os.remove(drop) step) left those partial
+    INDEX writes sitting in a still-open transaction — never rolled back — so the NEXT
+    unrelated commit (a totally different create_node) swept them into the sqlite index too,
+    durably repointing R's edge from Drop to Keep in the index despite merge_nodes having
+    raised. This is checked against a RAW connection to the index db (never a fresh
+    GraphStore, whose reindex() would rebuild the index from the already-rewritten on-disk
+    referrer file regardless of the fix, masking the very distinction being tested) so only
+    what the sqlite index itself durably committed is observed. Reproduced by the
+    orchestrator; fixed by GraphStore._locked_transaction rolling back on any exception
+    escaping the locked body.
+    """
+    import sqlite3
+
+    keep = store.create_node(type=NodeType.CONCEPT, title="Rollback Merge Keep")
+    drop = store.create_node(type=NodeType.CONCEPT, title="Rollback Merge Drop")
+    referrer = store.create_node(type=NodeType.CONCEPT, title="Rollback Merge Referrer")
+    store.create_edge(referrer.id, drop.id, EdgeType.RELATES_TO)
+
+    real_remove = os.remove
+
+    def flaky_remove(path):
+        if Path(path).stem == drop.id:
+            raise OSError("simulated: file already gone (external race)")
+        return real_remove(path)
+
+    original = store_module.os.remove
+    store_module.os.remove = flaky_remove
+    try:
+        with pytest.raises(OSError, match="already gone"):
+            store.merge_nodes(keep.id, drop.id)
+    finally:
+        store_module.os.remove = original
+
+    # the failed mutation must not leave an open transaction behind
+    assert store.con.in_transaction is False
+
+    # a subsequent, wholly unrelated write must not durably drag the failed merge's partial
+    # index writes (referrer repointed to keep) along with its own, unrelated commit
+    store.create_node(type=NodeType.CONCEPT, title="Rollback Merge Unrelated")
+
+    raw = sqlite3.connect(str(store.paths.index_db))
+    try:
+        edge_rows = raw.execute("SELECT src, dst FROM edges WHERE src = ?", (referrer.id,)).fetchall()
+    finally:
+        raw.close()
+    assert edge_rows == [(referrer.id, drop.id)], (
+        "referrer's edge in the durable sqlite index must still point at drop — the failed "
+        "merge's in-flight repoint to keep must never have been committed, whether by its own "
+        "commit or leaked into a later, unrelated one"
+    )
 
 
 # -- locking ------------------------------------------------------------------------------------

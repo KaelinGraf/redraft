@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TypeVar
@@ -32,6 +33,19 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = (Path(__file__).parent / "static").resolve()
 
 T = TypeVar("T")
+
+# FIX (CSRF): this UI has no auth of its own -- it's a strictly local dev tool (127.0.0.1 by
+# default) -- so any cross-origin page open in the same browser could otherwise POST/GET
+# against it. Any loopback HOST is accepted regardless of PORT: loopback is inherently
+# local-trust (only a process already running as this same user/machine can bind or reach
+# it), which avoids having to thread the actual bound port into a middleware built at
+# create_app() time (uvicorn's port==0 auto-assign, or a caller that just doesn't pass one,
+# would otherwise have no port to check against).
+_LOOPBACK_ORIGIN_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", re.IGNORECASE)
+
+
+def _is_allowed_origin(origin: str) -> bool:
+    return _LOOPBACK_ORIGIN_RE.match(origin) is not None
 
 
 @dataclass
@@ -150,6 +164,28 @@ def create_app(
             asyncio.create_task(_warm_embedder(state))
             if state.reindex_poll_interval:
                 asyncio.create_task(_poll_reindex(state))
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def _same_origin_guard(request: Request, call_next):
+        """CSRF hardening: reject any request carrying an Origin header whose host isn't
+        loopback. Browsers attach Origin to cross-origin AND same-origin fetch/XHR/form
+        requests alike, so a same-origin SPA fetch (Origin == this server's own scheme+host)
+        is exactly as loopback as request.url itself and passes unaffected; only a genuinely
+        foreign Origin (e.g. http://evil.example, from a cross-origin page's script) is
+        rejected. Requests with NO Origin header at all (curl, a same-origin top-level
+        navigation) are also let through unchanged -- Origin's absence means no
+        browser-mediated cross-origin caller is involved in the first place. Registered AFTER
+        _start_background_tasks_once above so it wraps OUTSIDE it (Starlette's user_middleware
+        list is built such that the last `@app.middleware` added runs first) -- a rejected
+        cross-origin request never even reaches that lazy task-kickoff, let alone any router.
+        Applies to every route, GET included: GET is read-only so allowing it is safe, and
+        applying uniformly (rather than only to mutating verbs) also closes the reindex-CSRF
+        finding for free without a second, route-specific mechanism.
+        """
+        origin = request.headers.get("origin")
+        if origin is not None and not _is_allowed_origin(origin):
+            return PlainTextResponse("cross-origin request rejected", status_code=403)
         return await call_next(request)
 
     @app.get("/{full_path:path}")

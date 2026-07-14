@@ -12,10 +12,11 @@ import hashlib
 import json
 import os
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Iterator, Literal
 
 import sqlite_vec
 
@@ -79,6 +80,29 @@ class GraphStore:
 
     def _write_lock(self):
         return write_lock(self.paths.root)
+
+    @contextmanager
+    def _locked_transaction(self) -> Iterator[None]:
+        """Every mutator's body runs under this instead of a bare `with self._write_lock():`
+        (design §6.3's crash-consistency ordering is per-method; this closes the gap ONE
+        step up, at connection-lifetime scope). self.con is a single persistent connection
+        for the store's whole life, and every mutator issues its index._upsert_node_index /
+        _remove_node_index calls uncommitted, only committing at the very end of a successful
+        run. If a mutator raises partway through -- after some of those index writes but
+        before its own self.con.commit() -- the partial writes previously stayed sitting in
+        the still-open transaction, silently landing on disk whenever the NEXT unrelated
+        mutation happened to call self.con.commit(). Rolling back here on ANY exception
+        escaping the locked body (before the lock itself is released) discards that partial
+        work instead, so a failed mutation can never leak into a later, unrelated one.
+        embed_upsert/embed_delete (S3a) commit internally by design and are unaffected either
+        way -- this only ever discards the plain index._* rows a failed mutator left pending.
+        """
+        with self._write_lock():
+            try:
+                yield
+            except BaseException:
+                self.con.rollback()
+                raise
 
     def _node_path(self, node_id: str) -> Path:
         return self.paths.nodes_dir / f"{node_id}.md"
@@ -154,7 +178,7 @@ class GraphStore:
         resolved_status = validate_status(node_type, status)
         title = unicodedata.normalize("NFC", title)
 
-        with self._write_lock():
+        with self._locked_transaction():
             node_id = sanitize_title_to_id(title)
             existing = self._find_existing_id(node_id)
             if existing is not None:
@@ -210,7 +234,7 @@ class GraphStore:
         `remove_properties`, removal wins (the merge writes it, then the removal deletes it).
         This is the only way to delete a properties key -- `properties` alone cannot.
         """
-        with self._write_lock():
+        with self._locked_transaction():
             self._require_exists(id)
             path = self._node_path(id)
             current = load_node_file(path)
@@ -243,7 +267,7 @@ class GraphStore:
             return proposed
 
     def delete_node(self, id: str) -> None:
-        with self._write_lock():
+        with self._locked_transaction():
             self._require_exists(id)
             os.remove(self._node_path(id))
             index._remove_node_index(self.con, id)
@@ -294,7 +318,7 @@ class GraphStore:
 
     def create_edge(self, src: str, dst: str, type: EdgeType) -> Edge:
         edge_type = EdgeType(type)
-        with self._write_lock():
+        with self._locked_transaction():
             self._require_exists(src)
             self._require_exists(dst)
 
@@ -343,7 +367,7 @@ class GraphStore:
         never double-applied, never dropped from the result.
         """
         parsed = [(src, dst, EdgeType(raw_type)) for src, dst, raw_type in edges]
-        with self._write_lock():
+        with self._locked_transaction():
             proposed: dict[str, Node] = {}
             changed_srcs: set[str] = set()
 
@@ -384,7 +408,7 @@ class GraphStore:
 
     def delete_edge(self, src: str, dst: str, type: EdgeType) -> None:
         edge_type = EdgeType(type)
-        with self._write_lock():
+        with self._locked_transaction():
             # A3: only src must exist — dst may already be gone (a dangling edge), and this is
             # precisely the call the dangling_edges() -> delete_edge repair loop needs to work.
             self._require_exists(src)
@@ -406,7 +430,7 @@ class GraphStore:
                 self.con.commit()
 
     def merge_nodes(self, keep_id: str, drop_id: str) -> MergeOutcome:
-        with self._write_lock():
+        with self._locked_transaction():
             if keep_id == drop_id:
                 raise ValueError("merge_nodes: keep_id and drop_id must be different")
             self._require_exists(keep_id)
@@ -498,7 +522,7 @@ class GraphStore:
             )
 
     def rename_node(self, id: str, new_title: str) -> Node:
-        with self._write_lock():
+        with self._locked_transaction():
             self._require_exists(id)
             new_title = unicodedata.normalize("NFC", new_title)
             new_id = sanitize_title_to_id(new_title)

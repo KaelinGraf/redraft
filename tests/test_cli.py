@@ -79,14 +79,19 @@ def test_overview_honors_redraft_dir_env_when_no_positional_arg(tmp_path, monkey
     assert "Architecture" in capsys.readouterr().out
 
 
-def test_overview_missing_redraft_dir_and_no_arg_errors(monkeypatch, capsys):
+def test_overview_defaults_to_cwd_when_no_redraft_dir_and_no_arg(tmp_path, monkeypatch, capsys):
+    """FIX: `redraft overview`/`sync` are meant to be run interactively from inside the graph
+    dir itself, but REDRAFT_DIR is only ever injected into the MCP server's own subprocess env
+    -- never an interactive shell -- so with neither an explicit arg nor REDRAFT_DIR set, this
+    now defaults to the CWD instead of erroring (scoped to this CLI subcommand only;
+    resolve_graph_dir's own global contract is unchanged, see test_config.py)."""
     monkeypatch.delenv("REDRAFT_DIR", raising=False)
+    _seed(tmp_path)
+    monkeypatch.chdir(tmp_path)
 
-    with pytest.raises(SystemExit) as exc_info:
-        cli.main(["overview"])
+    cli.main(["overview"])
 
-    assert exc_info.value.code == 1
-    assert "REDRAFT_DIR" in capsys.readouterr().err
+    assert "Architecture" in capsys.readouterr().out
 
 
 # -- sync -------------------------------------------------------------------------------
@@ -148,14 +153,15 @@ def test_sync_honors_redraft_dir_env_when_no_positional_arg(tmp_path, monkeypatc
     assert "already up to date" in capsys.readouterr().out
 
 
-def test_sync_missing_redraft_dir_and_no_arg_errors(monkeypatch, capsys):
+def test_sync_defaults_to_cwd_when_no_redraft_dir_and_no_arg(tmp_path, monkeypatch, capsys):
+    """Mirror of test_overview_defaults_to_cwd_when_no_redraft_dir_and_no_arg for `sync`."""
     monkeypatch.delenv("REDRAFT_DIR", raising=False)
+    init_graph(tmp_path, git=False)
+    monkeypatch.chdir(tmp_path)
 
-    with pytest.raises(SystemExit) as exc_info:
-        cli.main(["sync"])
+    cli.main(["sync"])
 
-    assert exc_info.value.code == 1
-    assert "REDRAFT_DIR" in capsys.readouterr().err
+    assert "already up to date" in capsys.readouterr().out
 
 
 def test_sync_not_a_graph_errors(tmp_path, capsys):
@@ -164,3 +170,31 @@ def test_sync_not_a_graph_errors(tmp_path, capsys):
 
     assert exc_info.value.code == 1
     assert "not a redraft graph" in capsys.readouterr().err
+
+
+# -- init --help --------------------------------------------------------------------------
+
+
+def test_init_help_with_no_target_dir_exits_zero_and_prints_options(capsys):
+    """MAJOR fix: `redraft init --help` (README.md's own literal quickstart command) used to
+    hit the TOP-LEVEL parser's own "unrecognized arguments: --help" error (an argparse
+    REMAINDER + add_help=False quirk on the old init subparser) instead of ever reaching
+    init.main's own argparse, which already handles --help correctly. cli.py now dispatches
+    `init` straight to init.main before the top-level parser ever sees its args."""
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["init", "--help"])
+
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "--no-git" in out
+    assert "--project-name" in out
+
+
+def test_init_help_after_target_dir_exits_zero_and_prints_options(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["init", "/tmp/some-dir", "--help"])
+
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "--no-git" in out
+    assert "--project-name" in out
