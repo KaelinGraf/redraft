@@ -23,6 +23,17 @@ typed nodes and typed edges, stored as plain Markdown so git stays the source of
 MCP server gives your agent the tools to organize the graph as the project evolves; reports
 collapse it back into review-grade documents on demand -- including the roads not taken.
 
+**Why not an ADR folder, a wiki, or plain Obsidian?** All three store prose; none store
+structure an agent can act on. ADRs are linear, append-only files -- the rejected
+alternative lives in a paragraph nobody can query, and nothing links a decision to the
+requirement it satisfies or the question it answered. A wiki adds links but lives outside
+git, away from the code and the agent's hands. Obsidian gets the storage format right --
+which is why a redraft graph *is* an Obsidian-compatible vault -- but a vault alone has no
+typed schema, no integrity checks, and no tools an agent can call. redraft is that missing
+layer: a closed type system, structural invariants the server actually enforces (cycles,
+collisions, dangling links), hybrid retrieval built for an agent, and reports that put
+accepted and rejected alternatives in the same table.
+
 ## Quickstart
 
 **1. Clone and install the engine.**
@@ -62,6 +73,10 @@ claude
 `.mcp.json` tells Claude Code how to launch `redraft serve` for this graph -- the tools
 (`create_node`, `search_nodes`, `assemble_report`, and the rest) appear automatically once
 the session starts.
+
+redraft speaks standard MCP over stdio, so any MCP client can drive it the same way --
+point yours at `redraft serve` with `REDRAFT_DIR` set. Claude Code is the documented path
+because the shipped skills and the SessionStart hook target it.
 
 `redraft serve` needs a uv-managed Python 3.12 (pinned in `.python-version`): the retrieval
 stack requires a `sqlite3` build with FTS5 and extension-loading support, which a

@@ -752,11 +752,53 @@ table.decision-table th {
 }
 
 .map-view {
+  position: relative;
   height: calc(100vh - 96px);
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
   background: var(--surface);
+}
+
+/* Overlaid in the map's own corner -- pointer-events: none so it never intercepts the
+ * canvas's own drag/zoom/click handling underneath it. */
+.map-legend {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 200px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  pointer-events: none;
+}
+
+.map-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.map-legend__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.map-legend__caption {
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--text-faint);
 }
 
 .report-list {

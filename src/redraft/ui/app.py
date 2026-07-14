@@ -248,11 +248,26 @@ def create_app(
             return PlainTextResponse("cross-origin request rejected", status_code=403)
         return await call_next(request)
 
-    @app.get("/{full_path:path}")
-    async def spa_fallback(full_path: str):
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
+    async def spa_fallback(request: Request, full_path: str):
         """Registered LAST, after every /api/* router include and the /assets mount --
         client-side routes (react-router-dom paths) have no matching server route, so this
         catch-all returns the SPA shell for anything else.
+
+        GET+HEAD (not just GET): a bare @app.get left every path -- including "/" -- 405ing on
+        HEAD, which health checks and link unfurlers use routinely. FastAPI/Starlette strip the
+        body for a HEAD response automatically, so no branching is needed here for the SPA/static
+        paths this route is actually meant to serve.
+
+        BUG FOUND AND FIXED (this same HEAD change): Starlette's router calls the FIRST route
+        that FULLY matches a request, and this wildcard's `:path` converter fully matches every
+        URL -- so once it also declared HEAD, it started winning the routing race against every
+        real /api/* GET-only route on a HEAD request (e.g. HEAD /api/outline), silently
+        returning this SPA shell (200, text/html) instead of the 405 those endpoints should give
+        (the specific route only ever gets a PARTIAL match for an unsupported method, and a
+        partial match never overrides a wildcard's full one). Explicitly refusing HEAD for any
+        full_path under "api/" restores /api/*'s intended GET-only 405 without touching a single
+        one of those routes.
 
         BUG FOUND AND FIXED: a root-level static file that vite's public/ dir copies straight
         into static/ (favicon.svg) had no route of its own -- every request for it fell
@@ -265,6 +280,8 @@ def create_app(
         frontend hasn't landed) -- a plain 404 here instead of an unhandled stat-error crash,
         so a manual smoke-check against this backend alone (or a stray browser probe like
         /favicon.ico) gets a clean response, not a 500."""
+        if request.method == "HEAD" and full_path.startswith("api/"):
+            return PlainTextResponse("Method Not Allowed", status_code=405)
         candidate = (STATIC_DIR / full_path).resolve()
         if candidate.is_file() and candidate.is_relative_to(STATIC_DIR):
             return FileResponse(candidate)

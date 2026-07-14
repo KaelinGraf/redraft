@@ -19,8 +19,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from redraft.config import resolve_graph_dir
+from redraft.config import GraphPaths, resolve_graph_dir
 from redraft.errors import LockTimeoutError
+from redraft.init import NotAGraphError
 from redraft.models import ProjectOverview
 from redraft.report import overview as lib_overview
 from redraft.store import GraphStore
@@ -101,9 +102,16 @@ def main(graph_dir: str | Path | None = None) -> None:
     argparse layer the way init.py's --no-git/--project-name do)."""
     try:
         resolved = resolve_graph_dir(graph_dir)
+        if not GraphPaths(resolved).nodes_dir.is_dir():
+            # GraphStore's constructor scaffolds graph/ and index/ unconditionally -- refuse
+            # BEFORE constructing it (mirrors sync_graph's own NotAGraphError refusal in
+            # init.py) instead of silently creating a graph in whatever directory this was run.
+            raise NotAGraphError(
+                f"{resolved} is not a redraft graph (no graph/nodes/); run 'redraft init' to create one"
+            )
         store = GraphStore(resolved)  # no retrieval_config: cheap reindex only -- see module docstring
         result = lib_overview(store.con)
-    except (RuntimeError, LockTimeoutError) as e:
+    except (RuntimeError, LockTimeoutError, NotAGraphError) as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
     print(render_markdown(result), end="")

@@ -40,16 +40,32 @@ def test_overview_smoke_prints_markdown_for_seeded_graph(tmp_path, capsys):
     assert "How should embeddings be cached" in out  # surfaced via the open-questions list
 
 
-def test_overview_on_a_bare_directory_bootstraps_the_index_and_prints_empty_message(tmp_path, capsys):
+def test_overview_on_a_freshly_inited_graph_bootstraps_the_index_and_prints_empty_message(tmp_path, capsys):
     """Regression guard for the SessionStart-hook scenario: `redraft overview` may be the
     very FIRST `redraft` process to ever touch a graph (fired right after `redraft init`,
-    before any MCP server has booted and built index/graph.sqlite3). A bare directory --
-    nothing pre-created, not even graph/nodes/ -- must still produce a clean result, not a
-    missing-schema crash."""
+    before any MCP server has booted and built index/graph.sqlite3). init_graph() already
+    scaffolds an empty graph/nodes/ -- that alone (no index/ yet) must still produce a clean
+    result, not a missing-schema crash."""
+    init_graph(tmp_path, git=False)
+
     cli.main(["overview", str(tmp_path)])
 
     out = capsys.readouterr().out
     assert "Empty graph" in out
+
+
+def test_overview_on_a_bare_directory_refuses_without_scaffolding(tmp_path, capsys):
+    """FIX: overview used to construct GraphStore unconditionally, and GraphStore's
+    constructor scaffolds graph/ and index/ unconditionally too -- so running `overview` in
+    ANY random directory (it defaults graph_dir to the CWD) silently created a graph there.
+    Now it refuses, before ever constructing GraphStore, exactly like `sync` already does."""
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["overview", str(tmp_path)])
+
+    assert exc_info.value.code == 1
+    assert "not a redraft graph" in capsys.readouterr().err
+    assert not (tmp_path / "graph").exists()
+    assert not (tmp_path / "index").exists()
 
 
 def test_overview_collapses_floating_nodes_into_one_off_spine_line(tmp_path, capsys):

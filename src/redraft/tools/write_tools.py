@@ -111,11 +111,18 @@ def _validate_title(title: str) -> None:
     FOUND note for why this exists. Also mirrors GraphStore's own MAX_TITLE_CHARS cap (a bare
     ValueError from GraphStore isn't one of pin R7's 6 mapped types, so unguarded it would be
     masked by FastMCP(mask_error_details=True) into an opaque error for a plain oversized-title
-    mistake -- same failure class as the empty-title case this function already guards)."""
+    mistake -- same failure class as the empty-title case this function already guards).
+
+    Also mirrors GraphStore's control-character rejection (Batch-C hardening: a NUL in a title
+    round-tripped invisibly into graph/nodes/*.md's YAML frontmatter) -- same masked-ValueError
+    failure class again."""
     if not unicodedata.normalize("NFC", title).strip():
         raise InvalidArgumentError("title must contain at least one non-whitespace character")
     if len(title) > MAX_TITLE_CHARS:
         raise InvalidArgumentError(f"title exceeds {MAX_TITLE_CHARS}-character limit", length=len(title))
+    for ch in title:
+        if ord(ch) < 0x20 or ord(ch) == 0x7F:
+            raise InvalidArgumentError(f"title contains control character U+{ord(ch):04X}")
 
 
 def _validate_body_size(body: str) -> None:
@@ -128,10 +135,18 @@ def _validate_body_size(body: str) -> None:
     size (never silently truncates), but a rejection reaching only that layer surfaces here as
     an unmapped, FastMCP-masked ValueError rather than this function's clearer message -- same
     accepted residual shape as sanitize_title_to_id's illegal-character-only case, documented
-    above in this module's own docstring."""
+    above in this module's own docstring.
+
+    Also rejects a NUL in the incoming chunk (Batch-C hardening) -- \\n and \\t are legitimate
+    in body prose and stay accepted; only NUL, which no human types and which truncates
+    C-string-based tooling downstream, is rejected. Same append-accumulation residual gap as
+    the size check above: a NUL introduced only by accumulation across calls isn't possible
+    (a NUL is rejected on ITS OWN chunk the moment it's first sent), so no residual gap here."""
     size = len(body.encode("utf-8"))
     if size > MAX_BODY_BYTES:
         raise InvalidArgumentError(f"body exceeds {MAX_BODY_BYTES}-byte limit", size=size)
+    if "\x00" in body:
+        raise InvalidArgumentError("body contains control character U+0000")
 
 
 def _validate_status(type_: str, status: str | None) -> None:

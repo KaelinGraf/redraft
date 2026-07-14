@@ -103,6 +103,51 @@ def test_update_node_normal_sized_body_still_works(store):
     assert len(updated.body) == 1000
 
 
+# -- control characters (Batch-C hardening: NUL etc. round-tripping into YAML invisibly) -------
+
+
+def test_create_node_rejects_nul_in_title(store):
+    with pytest.raises(ValueError, match="control character U\\+0000"):
+        store.create_node(type=NodeType.CONCEPT, title="bad\x00title")
+    assert store.con.execute("SELECT 1 FROM nodes").fetchone() is None
+
+
+def test_create_node_rejects_newline_in_title(store):
+    # titles are single-line labels -- even \n/\t are wrong there, unlike in a body
+    with pytest.raises(ValueError, match="control character U\\+000A"):
+        store.create_node(type=NodeType.CONCEPT, title="two\nlines")
+
+
+def test_create_node_rejects_nul_in_body(store):
+    with pytest.raises(ValueError, match="control character U\\+0000"):
+        store.create_node(type=NodeType.CONCEPT, title="Nul Body", body="bad\x00body")
+
+
+def test_create_node_accepts_newline_and_tab_in_body(store):
+    node = store.create_node(type=NodeType.CONCEPT, title="Normal Prose Body", body="line one\n\tindented line two")
+    assert node.body == "line one\n\tindented line two"
+
+
+def test_update_node_rejects_nul_in_appended_body(store):
+    node = store.create_node(type=NodeType.CONCEPT, title="Update Nul Target")
+    with pytest.raises(ValueError, match="control character U\\+0000"):
+        store.update_node(node.id, body="bad\x00chunk")
+    assert store.get_node(node.id).body == ""  # untouched, no partial write
+
+
+def test_update_node_accepts_newline_and_tab_in_body(store):
+    node = store.create_node(type=NodeType.CONCEPT, title="Update Normal Prose")
+    updated = store.update_node(node.id, body="a line\n\ta tabbed line", mode="replace")
+    assert updated.body == "a line\n\ta tabbed line"
+
+
+def test_rename_node_rejects_nul_in_new_title(store):
+    node = store.create_node(type=NodeType.CONCEPT, title="Rename Nul Target")
+    with pytest.raises(ValueError, match="control character U\\+0000"):
+        store.rename_node(node.id, "bad\x00new title")
+    assert store.get_node(node.id).title == "Rename Nul Target"  # untouched
+
+
 # -- part_of cycles / single-parent -----------------------------------------------------------
 
 

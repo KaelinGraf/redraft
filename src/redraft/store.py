@@ -59,6 +59,27 @@ def _check_body_size(body: str) -> None:
         raise ValueError(f"body exceeds {MAX_BODY_BYTES}-byte limit (got {size} bytes)")
 
 
+# A NUL (or any other C0/DEL control character) in a title round-tripped straight through to
+# graph/nodes/*.md's YAML frontmatter, invisible garbage in every downstream surface (UI,
+# Obsidian, FTS) -- and sanitize_title_to_id silently strips it from the id, so title and id
+# silently diverge on a character the user can't even see. A title is a single-line label
+# (organizing-protocol.md's own framing): even \n/\t are wrong there, not just NUL. A body is
+# legitimate prose that needs \n and \t; only NUL (which can't appear in any text a human
+# typed, and truncates C-string-based tooling downstream) is rejected there.
+_C0_AND_DEL = {chr(c) for c in range(0x20)} | {chr(0x7F)}
+
+
+def _check_title_control_chars(title: str) -> None:
+    for ch in title:
+        if ch in _C0_AND_DEL:
+            raise ValueError(f"title contains control character U+{ord(ch):04X}")
+
+
+def _check_body_control_chars(body: str) -> None:
+    if "\x00" in body:
+        raise ValueError("body contains control character U+0000")
+
+
 def _semantic_form(node: Node) -> str:
     """Canonical serialized form excluding created/updated, for the no-op-write short-circuit
     (design §4.5). Reuses dump_node_file itself rather than a parallel field list, so it can
@@ -203,7 +224,9 @@ class GraphStore:
         resolved_status = validate_status(node_type, status)
         title = unicodedata.normalize("NFC", title)
         _check_title_length(title)
+        _check_title_control_chars(title)
         _check_body_size(body)
+        _check_body_control_chars(body)
 
         with self._locked_transaction():
             node_id = sanitize_title_to_id(title)
@@ -276,6 +299,7 @@ class GraphStore:
                 # from before this cap existed) is left alone by any update that doesn't touch
                 # body at all (the `body is None` case, above this block, never reaches here).
                 _check_body_size(new_body)
+                _check_body_control_chars(new_body)
 
             new_status = validate_status(current.type, status) if status is not None else current.status
             new_properties = dict(current.properties)
@@ -576,6 +600,7 @@ class GraphStore:
             self._require_exists(id)
             new_title = unicodedata.normalize("NFC", new_title)
             _check_title_length(new_title)
+            _check_title_control_chars(new_title)
             new_id = sanitize_title_to_id(new_title)
 
             rows = self.con.execute("SELECT src, type FROM edges WHERE dst = ?", (id,)).fetchall()

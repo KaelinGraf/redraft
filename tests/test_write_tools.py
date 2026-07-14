@@ -79,6 +79,41 @@ async def test_update_node_oversized_body_raises_invalid_argument(mcp_server):
             await client.call_tool("update_node", {"id": node.id, "body": "x" * (MAX_BODY_BYTES + 1)})
 
 
+# -- control characters (Batch-C hardening) ----------------------------------------------------
+
+
+async def test_create_node_nul_in_title_raises_invalid_argument(mcp_server):
+    async with Client(mcp_server) as client:
+        with pytest.raises(ToolError, match="invalid_argument"):
+            await client.call_tool("create_node", {"type": "concept", "title": "bad\x00title"})
+
+
+async def test_create_node_nul_in_body_raises_invalid_argument(mcp_server):
+    async with Client(mcp_server) as client:
+        with pytest.raises(ToolError, match="invalid_argument"):
+            await client.call_tool("create_node", {"type": "concept", "title": "Nul Body", "body": "bad\x00body"})
+
+
+async def test_create_node_newline_and_tab_in_body_accepted(mcp_server):
+    async with Client(mcp_server) as client:
+        node = await _create(client, "concept", "Normal Prose", body="line one\n\tindented line two")
+        assert node.body == "line one\n\tindented line two"
+
+
+async def test_update_node_nul_in_body_raises_invalid_argument(mcp_server):
+    async with Client(mcp_server) as client:
+        node = await _create(client, "concept", "Update Nul Target")
+        with pytest.raises(ToolError, match="invalid_argument"):
+            await client.call_tool("update_node", {"id": node.id, "body": "bad\x00chunk"})
+
+
+async def test_rename_node_nul_in_new_title_raises_invalid_argument(mcp_server):
+    async with Client(mcp_server) as client:
+        node = await _create(client, "concept", "Rename Nul Target")
+        with pytest.raises(ToolError, match="invalid_argument"):
+            await client.call_tool("rename_node", {"id": node.id, "new_title": "bad\x00new title"})
+
+
 async def test_create_node_default_status_applied(mcp_server):
     async with Client(mcp_server) as client:
         node = await _create(client, "decision", "Fork GeoTransformer")

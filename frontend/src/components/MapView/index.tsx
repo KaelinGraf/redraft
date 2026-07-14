@@ -4,6 +4,7 @@ import ForceGraph2D, { type ForceGraphMethods, type NodeObject } from "react-for
 import { useOutline } from "../../api/queries";
 import { buildNodeLink } from "../../lib/nav";
 import { nodeTypeColor } from "../../lib/palette";
+import type { NodeType } from "../../api/types";
 import { EmptyState } from "../EmptyState";
 
 /** CENTER, Map tab: /map -- react-force-graph-2d fed /api/outline's existing {nodes, edges}
@@ -55,6 +56,14 @@ export default function MapView() {
     };
   }, [data]);
 
+  // Legend types: only what's actually on the map (not every NodeType.NODE_TYPE_COLOR key),
+  // so a graph that never used e.g. "milestone" doesn't show a swatch for it. Sorted for a
+  // stable render order across re-fetches.
+  const presentTypes = useMemo(
+    () => [...new Set(graphData.nodes.map((n) => n.type))].sort() as NodeType[],
+    [graphData.nodes],
+  );
+
   if (isPending) return <div className="spinner-line">Loading map…</div>;
   if (isError) return <EmptyState>Failed to load the graph.</EmptyState>;
   if (graphData.nodes.length === 0) return <EmptyState>No nodes yet.</EmptyState>;
@@ -79,6 +88,15 @@ export default function MapView() {
           fgRef.current?.zoomToFit(0, 40); // instant (0ms) -- the app has no animations; this is a one-time layout fit, not a flourish
         }}
       />
+      <div className="map-legend">
+        {presentTypes.map((type) => (
+          <div className="map-legend__item" key={type}>
+            <span className="map-legend__swatch" style={{ background: nodeTypeColor(type) }} />
+            {type}
+          </div>
+        ))}
+        <div className="map-legend__caption">edges: part_of (hierarchy) only</div>
+      </div>
     </div>
   );
 }
