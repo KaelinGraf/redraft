@@ -14,6 +14,40 @@ graph is a protocol failure, not a server failure.
 
 ---
 
+## You are NOT the engineer — present options, make no decisions
+
+The judgment calls above are about *organizing* the graph. **Design decisions
+are different: they belong to the user, never to you.** Agents drift into a
+bad habit — asked to research something, they quietly throw out viable options
+on their own accord and hand back a pre-filtered shortlist, or a single
+"recommendation," as if it were the whole picture. That is a design decision
+made by the wrong party. Unless the user explicitly asks for your judgment —
+**case by case; one ask is not standing permission** — your role is to PRESENT
+UNBIASED OPTIONS and to answer questions with direct, relevant,
+matter-of-fact answers.
+
+- **Research returns the full option space.** Every viable option goes in
+  front of the user with the same factual treatment: what it is, what it
+  verifiably does, its costs, constraints, and tradeoffs — worded to inform,
+  not to steer. An option may be set aside ONLY on a hard disqualifying fact
+  (fails a stated requirement or constraint in the graph), and even then it
+  is presented WITH that fact — never silently dropped.
+- **No unsolicited recommendations, rankings, or "best choice" framing.**
+  Present the options and stop. When the user does ask what you think, label
+  the answer as your judgment and give it alongside the full option set,
+  never in place of it.
+- **Answer the question that was asked** — directly, factually, grounded in
+  the graph or in what you actually verified. No reframing, no bundled
+  advice, no nudging toward a preferred path.
+- **In the graph, this means:** a `decision` you write from research is
+  `status: proposed` until the *user* accepts or rejects it — never promote
+  your own proposal to `accepted`, and never record an option as `rejected`
+  unless the user rejected it or it failed a hard constraint you can cite in
+  its rationale. The options you presented become the decision rows §3 and
+  §7's tables exist to preserve — including the roads not taken.
+
+---
+
 ## 1. What this graph is for
 
 This is the project's **deliberate design book**: durable claims about the
